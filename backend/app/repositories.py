@@ -196,6 +196,58 @@ def agent_definition_list(conn: sqlite3.Connection) -> list[AgentDefinition]:
     ]
 
 
+def agent_definition_update(
+    conn: sqlite3.Connection,
+    definition_id: int,
+    name: str | None = None,
+    prompt_markdown: str | None = None,
+    github_identity: str | None = None,
+    permissions: dict[str, Any] | None = None,
+) -> AgentDefinition:
+    existing = agent_definition_get(conn, definition_id)
+    if not existing:
+        raise RepositoryError(f"Agent definition {definition_id} not found")
+    updates: dict[str, Any] = {
+        "name": name if name is not None else existing.name,
+        "prompt_markdown": (
+            prompt_markdown if prompt_markdown is not None else existing.prompt_markdown
+        ),
+        "github_identity": (
+            github_identity if github_identity is not None else existing.github_identity
+        ),
+        "permissions_json": json.dumps(
+            permissions if permissions is not None else existing.permissions
+        ),
+    }
+    try:
+        conn.execute(
+            """
+            UPDATE agent_definitions
+            SET name = ?, prompt_markdown = ?, github_identity = ?, permissions_json = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (
+                updates["name"],
+                updates["prompt_markdown"],
+                updates["github_identity"],
+                updates["permissions_json"],
+                definition_id,
+            ),
+        )
+    except sqlite3.IntegrityError as exc:
+        raise RepositoryError(f"Agent definition '{updates['name']}' already exists") from exc
+    updated = agent_definition_get(conn, definition_id)
+    assert updated is not None
+    return updated
+
+
+def agent_definition_delete(conn: sqlite3.Connection, definition_id: int) -> None:
+    if agent_definition_in_use(conn, definition_id):
+        raise RepositoryError(f"Agent definition {definition_id} is in use")
+    conn.execute("DELETE FROM agent_definitions WHERE id = ?", (definition_id,))
+
+
 # ---------------------------------------------------------------------------
 # Model entries
 # ---------------------------------------------------------------------------
@@ -257,6 +309,64 @@ def model_entry_get(conn: sqlite3.Connection, entry_id: int) -> ModelEntry | Non
     )
 
 
+def model_entry_list(conn: sqlite3.Connection) -> list[ModelEntry]:
+    rows = conn.execute("SELECT * FROM model_entries ORDER BY id").fetchall()
+    return [
+        ModelEntry(
+            id=row["id"],
+            provider_id=row["provider_id"],
+            model_id=row["model_id"],
+            display_name=row["display_name"],
+            custom_config=loads(row["custom_config_json"]),
+            credentials=row["credentials"],
+        )
+        for row in rows
+    ]
+
+
+def model_entry_update(
+    conn: sqlite3.Connection,
+    entry_id: int,
+    provider_id: str | None = None,
+    model_id: str | None = None,
+    credentials: str | None = None,
+    display_name: str | None = None,
+    custom_config: dict[str, Any] | None = None,
+) -> ModelEntry:
+    existing = model_entry_get(conn, entry_id)
+    if not existing:
+        raise RepositoryError(f"Model entry {entry_id} not found")
+    conn.execute(
+        """
+        UPDATE model_entries
+        SET provider_id = COALESCE(?, provider_id),
+            model_id = COALESCE(?, model_id),
+            credentials = COALESCE(?, credentials),
+            display_name = COALESCE(?, display_name),
+            custom_config_json = COALESCE(?, custom_config_json),
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        """,
+        (
+            provider_id,
+            model_id,
+            credentials,
+            display_name,
+            json.dumps(custom_config) if custom_config is not None else None,
+            entry_id,
+        ),
+    )
+    updated = model_entry_get(conn, entry_id)
+    assert updated is not None
+    return updated
+
+
+def model_entry_delete(conn: sqlite3.Connection, entry_id: int) -> None:
+    if model_entry_in_use(conn, entry_id):
+        raise RepositoryError(f"Model entry {entry_id} is in use")
+    conn.execute("DELETE FROM model_entries WHERE id = ?", (entry_id,))
+
+
 # ---------------------------------------------------------------------------
 # Docker images
 # ---------------------------------------------------------------------------
@@ -284,6 +394,82 @@ def docker_image_get(conn: sqlite3.Connection, image_id: int) -> DockerImage | N
     if not row:
         return None
     return DockerImage(id=row["id"], image_name=row["image_name"])
+
+
+def docker_image_list(conn: sqlite3.Connection) -> list[DockerImage]:
+    rows = conn.execute("SELECT * FROM docker_images ORDER BY id").fetchall()
+    return [DockerImage(id=row["id"], image_name=row["image_name"]) for row in rows]
+
+
+def docker_image_update(
+    conn: sqlite3.Connection, image_id: int, image_name: str
+) -> DockerImage:
+    existing = docker_image_get(conn, image_id)
+    if not existing:
+        raise RepositoryError(f"Docker image {image_id} not found")
+    try:
+        conn.execute(
+            "UPDATE docker_images SET image_name = ? WHERE id = ?",
+            (image_name, image_id),
+        )
+    except sqlite3.IntegrityError as exc:
+        raise RepositoryError(f"Docker image '{image_name}' already exists") from exc
+    updated = docker_image_get(conn, image_id)
+    assert updated is not None
+    return updated
+
+
+def docker_image_delete(conn: sqlite3.Connection, image_id: int) -> None:
+    if docker_image_in_use(conn, image_id):
+        raise RepositoryError(f"Docker image {image_id} is in use")
+    conn.execute("DELETE FROM docker_images WHERE id = ?", (image_id,))
+
+
+# ---------------------------------------------------------------------------
+# In-use checks
+# ---------------------------------------------------------------------------
+
+
+def _id_referenced_in_json(value: Any, target_id: int) -> bool:
+    if isinstance(value, int):
+        return value == target_id
+    if isinstance(value, dict):
+        return any(_id_referenced_in_json(v, target_id) for v in value.values())
+    if isinstance(value, list):
+        return any(_id_referenced_in_json(item, target_id) for item in value)
+    return False
+
+
+def _entity_in_use(
+    conn: sqlite3.Connection,
+    entity_id: int,
+    entity_column: str,
+) -> bool:
+    instance_row = conn.execute(
+        f"SELECT 1 FROM agent_instances WHERE {entity_column} = ? LIMIT 1", (entity_id,)
+    ).fetchone()
+    if instance_row is not None:
+        return True
+    for column in ("reviewer_config_json", "implementor_config_json"):
+        rows = conn.execute(
+            f"SELECT {column} FROM projects WHERE {column} IS NOT NULL AND {column} != '{{}}'"
+        ).fetchall()
+        for row in rows:
+            if _id_referenced_in_json(loads(row[column]), entity_id):
+                return True
+    return False
+
+
+def agent_definition_in_use(conn: sqlite3.Connection, definition_id: int) -> bool:
+    return _entity_in_use(conn, definition_id, "agent_definition_id")
+
+
+def model_entry_in_use(conn: sqlite3.Connection, entry_id: int) -> bool:
+    return _entity_in_use(conn, entry_id, "model_entry_id")
+
+
+def docker_image_in_use(conn: sqlite3.Connection, image_id: int) -> bool:
+    return _entity_in_use(conn, image_id, "docker_image_id")
 
 
 # ---------------------------------------------------------------------------
