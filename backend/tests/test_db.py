@@ -45,7 +45,7 @@ def test_migrations_are_idempotent(tmp_db: Database) -> None:
     tmp_db.migrate(migrations)
     with tmp_db.connect() as conn:
         count = conn.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0]
-    assert count == 1
+    assert count == len(migrations)
 
 
 def test_database_file_is_private(tmp_path: Path) -> None:

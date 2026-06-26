@@ -951,3 +951,132 @@ def notification_mark_read(conn: sqlite3.Connection, notification_id: int) -> No
         "UPDATE notifications SET is_read = 1 WHERE id = ?",
         (notification_id,),
     )
+
+
+# ---------------------------------------------------------------------------
+# GitHub snapshots and polling status
+# ---------------------------------------------------------------------------
+
+
+# Per-issue LoomSystem status lifecycle (D45: reopened issues re-enter the pool).
+ISSUE_STATUS_UNASSIGNED = "unassigned"
+ISSUE_STATUS_IN_PROGRESS = "in-progress"
+ISSUE_STATUS_PR_OPENED = "PR-opened"
+ISSUE_STATUS_RESOLVED = "resolved"
+ISSUE_STATUS_FAILED = "failed"
+
+
+@dataclass
+class GitHubIssueSnapshot:
+    id: int
+    project_id: int
+    issue_number: int
+    title: str
+    state: str
+    loom_status: str
+    updated_at: str
+
+
+@dataclass
+class GitHubPullRequestSnapshot:
+    id: int
+    project_id: int
+    pr_number: int
+    title: str
+    state: str
+    merged: bool
+    updated_at: str
+
+
+@dataclass
+class PollingStatus:
+    project_id: int
+    last_polled_at: str | None
+    last_ok: bool
+    last_error: str | None
+
+
+def _github_issue_from_row(row: sqlite3.Row) -> GitHubIssueSnapshot:
+    return GitHubIssueSnapshot(
+        id=row["id"],
+        project_id=row["project_id"],
+        issue_number=row["issue_number"],
+        title=row["title"],
+        state=row["state"],
+        loom_status=row["loom_status"],
+        updated_at=row["updated_at"],
+    )
+
+
+def github_issue_list(conn: sqlite3.Connection, project_id: int) -> list[GitHubIssueSnapshot]:
+    rows = conn.execute(
+        "SELECT * FROM github_issues WHERE project_id = ? ORDER BY issue_number",
+        (project_id,),
+    ).fetchall()
+    return [_github_issue_from_row(row) for row in rows]
+
+
+def github_issue_get(
+    conn: sqlite3.Connection, project_id: int, issue_number: int
+) -> GitHubIssueSnapshot | None:
+    row = conn.execute(
+        "SELECT * FROM github_issues WHERE project_id = ? AND issue_number = ?",
+        (project_id, issue_number),
+    ).fetchone()
+    return _github_issue_from_row(row) if row else None
+
+
+def github_issue_set_status(
+    conn: sqlite3.Connection, project_id: int, issue_number: int, loom_status: str
+) -> None:
+    conn.execute(
+        "UPDATE github_issues SET loom_status = ?, updated_at = CURRENT_TIMESTAMP "
+        "WHERE project_id = ? AND issue_number = ?",
+        (loom_status, project_id, issue_number),
+    )
+
+
+def _github_pr_from_row(row: sqlite3.Row) -> GitHubPullRequestSnapshot:
+    return GitHubPullRequestSnapshot(
+        id=row["id"],
+        project_id=row["project_id"],
+        pr_number=row["pr_number"],
+        title=row["title"],
+        state=row["state"],
+        merged=bool(row["merged"]),
+        updated_at=row["updated_at"],
+    )
+
+
+def github_pr_list(
+    conn: sqlite3.Connection, project_id: int
+) -> list[GitHubPullRequestSnapshot]:
+    rows = conn.execute(
+        "SELECT * FROM github_prs WHERE project_id = ? ORDER BY pr_number",
+        (project_id,),
+    ).fetchall()
+    return [_github_pr_from_row(row) for row in rows]
+
+
+def github_pr_get(
+    conn: sqlite3.Connection, project_id: int, pr_number: int
+) -> GitHubPullRequestSnapshot | None:
+    row = conn.execute(
+        "SELECT * FROM github_prs WHERE project_id = ? AND pr_number = ?",
+        (project_id, pr_number),
+    ).fetchone()
+    return _github_pr_from_row(row) if row else None
+
+
+def polling_status_get(conn: sqlite3.Connection, project_id: int) -> PollingStatus | None:
+    row = conn.execute(
+        "SELECT * FROM polling_status WHERE project_id = ?", (project_id,)
+    ).fetchone()
+    if not row:
+        return None
+    return PollingStatus(
+        project_id=row["project_id"],
+        last_polled_at=row["last_polled_at"],
+        last_ok=bool(row["last_ok"]),
+        last_error=row["last_error"],
+    )
