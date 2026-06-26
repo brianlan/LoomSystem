@@ -15,6 +15,7 @@ from app.implementor_loop import (
     STATE_IDLE,
     STATE_RUNNING,
     ImplementorLoopError,
+    check_draining_complete,
     get_status,
     hard_stop,
     refill,
@@ -306,6 +307,109 @@ def test_hard_stop_terminates_all(conn: sqlite3.Connection) -> None:
     assert len(launcher.terminations) == 2
     assert get_status(conn, project.id)["state"] == STATE_IDLE
     assert get_status(conn, project.id)["running_implementors"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Draining → Idle transition tests (#33)
+# ---------------------------------------------------------------------------
+
+
+def test_check_draining_complete_transitions_to_idle(conn: sqlite3.Connection) -> None:
+    """Draining with zero running implementors → Idle."""
+    project = _seed_project(conn, [], parallelism=1)
+    soft_stop(conn, project.id)
+    assert get_status(conn, project.id)["state"] == STATE_DRAINING
+
+    completed = check_draining_complete(conn, project.id)
+
+    assert completed is True
+    assert get_status(conn, project.id)["state"] == STATE_IDLE
+
+
+def test_check_draining_complete_stays_draining_when_running(
+    conn: sqlite3.Connection,
+) -> None:
+    """Draining with implementors still running stays Draining."""
+    project = _seed_project(
+        conn, [IssueDTO(1, "A", "open"), IssueDTO(2, "B", "open")], parallelism=1
+    )
+    start_loop(conn, project.id)
+    triage = _FakeTriageClient(ranking=[1, 2])
+    launcher = _FakeLauncher()
+    refill(conn, project.id, triage, launcher)  # launches 1 implementor
+    soft_stop(conn, project.id)
+
+    completed = check_draining_complete(conn, project.id)
+
+    assert completed is False
+    assert get_status(conn, project.id)["state"] == STATE_DRAINING
+
+
+def test_check_draining_complete_noop_in_idle(conn: sqlite3.Connection) -> None:
+    """No effect on Idle state."""
+    project = _seed_project(conn, [], parallelism=1)
+    completed = check_draining_complete(conn, project.id)
+    assert completed is False
+    assert get_status(conn, project.id)["state"] == STATE_IDLE
+
+
+def test_check_draining_complete_noop_in_running(conn: sqlite3.Connection) -> None:
+    """No effect on Running state."""
+    project = _seed_project(conn, [], parallelism=1)
+    start_loop(conn, project.id)
+    completed = check_draining_complete(conn, project.id)
+    assert completed is False
+    assert get_status(conn, project.id)["state"] == STATE_RUNNING
+
+
+def test_refill_in_draining_transitions_to_idle_at_zero(
+    conn: sqlite3.Connection,
+) -> None:
+    """refill in Draining state with zero running → Idle + drained notification."""
+    project = _seed_project(
+        conn, [IssueDTO(1, "A", "open")], parallelism=1
+    )
+    start_loop(conn, project.id)
+    triage = _FakeTriageClient(ranking=[1])
+    launcher = _FakeLauncher()
+
+    # Launch 1 implementor, then soft stop.
+    refill(conn, project.id, triage, launcher)
+    soft_stop(conn, project.id)
+
+    # Simulate implementor completion.
+    for inst in repos.agent_instance_list_for_project(conn, project.id):
+        if inst.agent_type == "implementor" and inst.status == "running":
+            repos.agent_instance_update(conn, inst.id, status="terminated")
+    conn.commit()
+
+    result = refill(conn, project.id, triage, launcher)
+
+    assert result.launched == 0
+    assert result.drained is True
+    assert get_status(conn, project.id)["state"] == STATE_IDLE
+    notifications = repos.notification_list(conn, project_id=project.id)
+    assert any("draining complete" in n["message"].lower() for n in notifications)
+
+
+def test_refill_in_draining_stays_draining_when_running(
+    conn: sqlite3.Connection,
+) -> None:
+    """refill in Draining state with implementors still running → stays Draining."""
+    project = _seed_project(
+        conn, [IssueDTO(1, "A", "open")], parallelism=1
+    )
+    start_loop(conn, project.id)
+    triage = _FakeTriageClient(ranking=[1])
+    launcher = _FakeLauncher()
+    refill(conn, project.id, triage, launcher)
+    soft_stop(conn, project.id)
+
+    result = refill(conn, project.id, triage, launcher)
+
+    assert result.launched == 0
+    assert result.drained is False
+    assert get_status(conn, project.id)["state"] == STATE_DRAINING
 
 
 # ---------------------------------------------------------------------------

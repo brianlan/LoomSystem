@@ -113,10 +113,14 @@ def refill(
 ) -> RefillResult:
     """FR-22/FR-23: Run triage, then launch implementors up to configured parallelism.
 
-    Only acts when the loop is Running. In Draining, no new launches occur.
-    Returns the number of implementors launched and whether the backlog is drained.
+    In Draining state, checks whether all implementors have finished and
+    transitions back to Idle if so. Returns launched count and drained flag.
     """
     state = _get_state(conn, project_id)
+    if state == STATE_DRAINING:
+        if check_draining_complete(conn, project_id):
+            return RefillResult(launched=0, drained=True)
+        return RefillResult(launched=0, drained=False)
     if state != STATE_RUNNING:
         return RefillResult(launched=0, drained=False)
 
@@ -172,6 +176,27 @@ def refill(
 def soft_stop(conn: sqlite3.Connection, project_id: int) -> None:
     """FR-30a: Soft stop — no new implementor launches; running implementors continue."""
     _set_state(conn, project_id, STATE_DRAINING)
+
+
+def check_draining_complete(conn: sqlite3.Connection, project_id: int) -> bool:
+    """FR-30a: Transition Draining → Idle once all running implementors finish.
+
+    Returns True if the transition was made. No-op in other states.
+    Also callable from T11's heartbeat poll (#11) without modification.
+    """
+    if _get_state(conn, project_id) != STATE_DRAINING:
+        return False
+    if _running_implementor_count(conn, project_id) > 0:
+        return False
+    _set_state(conn, project_id, STATE_IDLE)
+    project = repos.project_get(conn, project_id)
+    if project is not None:
+        repos.notification_create(
+            conn,
+            message=f"Draining complete for project '{project.name}'",
+            project_id=project_id,
+        )
+    return True
 
 
 def hard_stop(
