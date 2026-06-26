@@ -5,7 +5,7 @@ from fastapi import FastAPI
 
 from app.dependencies import DBState
 from app.polling import PollingService, make_adapter_factory
-from app.routers import github, projects, settings
+from app.routers import github, projects, reviewers, settings
 
 
 @asynccontextmanager
@@ -27,6 +27,7 @@ app.state.polling_enabled = True
 app.include_router(settings.router)
 app.include_router(projects.router)
 app.include_router(github.router)
+app.include_router(reviewers.router)
 
 
 @app.get("/health")
