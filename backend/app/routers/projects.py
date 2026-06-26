@@ -1,13 +1,23 @@
 import sqlite3
 from typing import NoReturn
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
+from app import cleanup_service as cleanup_svc
 from app import repositories as repos
 from app import schemas
 from app.dependencies import get_db_conn
+from app.docker import DockerAdapter, SubprocessDockerAdapter
 
 router = APIRouter(prefix="/api/v1/projects", tags=["projects"])
+
+
+def _get_docker_adapter(request: Request) -> DockerAdapter:
+    adapter = getattr(request.app.state, "docker_adapter", None)
+    if adapter is None:
+        adapter = SubprocessDockerAdapter()
+        request.app.state.docker_adapter = adapter
+    return adapter
 
 
 def _raise_repository_error(exc: repos.RepositoryError) -> NoReturn:
@@ -80,9 +90,36 @@ def update_project(
 @router.delete("/{project_id}", response_model=schemas.MessageResponse)
 def delete_project(
     project_id: int,
+    request: Request,
     conn: sqlite3.Connection = Depends(get_db_conn),
 ) -> dict[str, str]:
-    if not repos.project_get(conn, project_id):
-        raise HTTPException(status_code=404, detail="Project not found")
-    repos.project_delete(conn, project_id)
+    try:
+        cleanup_svc.delete_project_cascade(
+            conn, project_id, _get_docker_adapter(request)
+        )
+    except cleanup_svc.CleanupError as exc:
+        msg = str(exc)
+        if "not found" in msg.lower():
+            raise HTTPException(status_code=404, detail=msg) from exc
+        raise HTTPException(status_code=422, detail=msg) from exc
     return {"message": "Project deleted"}
+
+
+@router.post(
+    "/{project_id}/hard-kill-implementors", response_model=schemas.MessageResponse
+)
+def hard_kill_implementors(
+    project_id: int,
+    request: Request,
+    conn: sqlite3.Connection = Depends(get_db_conn),
+) -> dict[str, str]:
+    try:
+        result = cleanup_svc.hard_kill_implementors(
+            conn, project_id, _get_docker_adapter(request)
+        )
+    except cleanup_svc.CleanupError as exc:
+        msg = str(exc)
+        if "not found" in msg.lower():
+            raise HTTPException(status_code=404, detail=msg) from exc
+        raise HTTPException(status_code=422, detail=msg) from exc
+    return {"message": f"Hard-killed {len(result.killed_instance_ids)} implementor(s)"}
