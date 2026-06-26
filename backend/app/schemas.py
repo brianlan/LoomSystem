@@ -130,3 +130,24 @@ class ProjectRead(BaseModel):
     implementor_config: dict[str, Any]
     created_at: str
     updated_at: str
+
+
+class ReviewerLaunchResult(BaseModel):
+    agent_instance_id: int
+    container_id: str
+    container_name: str
+
+
+class ReviewerInstanceStatus(BaseModel):
+    agent_instance_id: int
+    container_id: str | None
+    container_name: str | None
+    session_id: str | None
+    status: str
+
+
+class ReviewerStatus(BaseModel):
+    project_id: int
+    reviewer_cap: int
+    running_reviewers: int
+    reviewers: list[ReviewerInstanceStatus]
