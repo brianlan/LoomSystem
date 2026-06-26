@@ -29,7 +29,10 @@ def _get_docker_adapter(request: Request) -> DockerAdapter:
 def _get_trigger_service(request: Request) -> TriggerService:
     service = getattr(request.app.state, "trigger_service", None)
     if service is None:
-        service = TriggerService(_get_docker_adapter(request))
+        broker = getattr(request.app.state, "console_broker", None)
+        service = TriggerService(
+            _get_docker_adapter(request), console_broker=broker
+        )
         request.app.state.trigger_service = service
     return service
 

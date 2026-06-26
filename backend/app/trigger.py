@@ -21,9 +21,13 @@ import sqlite3
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from app import repositories as repos
 from app.docker import DockerAdapter
+
+if TYPE_CHECKING:
+    from app.console import ConsoleBroker
 
 # Number of seconds per minute, factored out for readable gap math.
 _MINUTE_SECONDS = 60
@@ -139,9 +143,11 @@ class TriggerService:
         self,
         adapter: DockerAdapter,
         scheduler: TriggerScheduler | None = None,
+        console_broker: ConsoleBroker | None = None,
     ) -> None:
         self._adapter = adapter
         self._scheduler = scheduler or TriggerScheduler()
+        self._console_broker = console_broker
 
     @property
     def scheduler(self) -> TriggerScheduler:
@@ -189,6 +195,8 @@ class TriggerService:
         exit_code: int | None = None
         output = ""
         captured: str | None = None
+        # FR-33: Persist each output line to console_chunks for replay/streaming (T14).
+        chunk_idx = repos.console_chunk_next_index(conn, req.agent_instance_id)
         try:
             stream = self._adapter.exec_stream(req.container_id, command)
             chunks: list[str] = []
@@ -196,6 +204,11 @@ class TriggerService:
                 chunks.append(line)
                 if session_id is None and captured is None:
                     captured = extract_session_id(line)
+                # Write to durable store + publish to live subscribers.
+                repos.console_chunk_append(conn, req.agent_instance_id, chunk_idx, line)
+                if self._console_broker:
+                    self._console_broker.publish(req.agent_instance_id, line)
+                chunk_idx += 1
             output = "".join(chunks)
             exit_code = stream.exit_code
         finally:

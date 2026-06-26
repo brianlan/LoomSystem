@@ -814,6 +814,19 @@ def console_chunk_append(
     )
 
 
+def console_chunk_next_index(
+    conn: sqlite3.Connection, agent_instance_id: int
+) -> int:
+    """Return the next available chunk_index for an agent instance."""
+    row = conn.execute(
+        "SELECT COALESCE(MAX(chunk_index), -1) + 1 AS next_idx "
+        "FROM console_chunks WHERE agent_instance_id = ?",
+        (agent_instance_id,),
+    ).fetchone()
+    assert row is not None
+    return int(row["next_idx"])
+
+
 def console_chunk_list(
     conn: sqlite3.Connection, agent_instance_id: int
 ) -> list[dict[str, Any]]:
