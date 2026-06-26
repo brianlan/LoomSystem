@@ -1,4 +1,5 @@
 import urllib.error
+from email.message import Message
 from io import BytesIO
 from unittest.mock import patch
 
@@ -33,23 +34,23 @@ def test_parse_invalid_url_raises() -> None:
         parse_repo_url("not a github url")
 
 
-def _fake_response(body: bytes, status: int = 200, headers: dict | None = None):
-    msg = BytesIO(body)
+class _Resp:
+    def __init__(self, body: bytes, headers: dict[str, str] | None = None) -> None:
+        self._body = body
+        self.headers = headers or {}
 
-    class _Resp:
-        def __init__(self) -> None:
-            self.headers = headers or {}
+    def read(self) -> bytes:
+        return self._body
 
-        def read(self) -> bytes:
-            return msg.getvalue()
+    def __enter__(self) -> "_Resp":
+        return self
 
-        def __enter__(self) -> "_Resp":
-            return self
+    def __exit__(self, *args: object) -> None:
+        pass
 
-        def __exit__(self, *args: object) -> None:
-            pass
 
-    return _Resp()
+def _fake_response(body: bytes, headers: dict[str, str] | None = None) -> _Resp:
+    return _Resp(body, headers)
 
 
 def test_list_open_issues_filters_out_prs() -> None:
@@ -80,6 +81,14 @@ def test_get_pull_request_merged_flag() -> None:
     assert pr.state == "closed"
 
 
+def test_get_issue_probe() -> None:
+    payload = b'{"number":7,"title":"bug","state":"open"}'
+    adapter = HttpGitHubAdapter(token="t")
+    with patch.object(adapter._opener, "open", return_value=_fake_response(payload)):
+        issue = adapter.get_issue("o", "r", 7)
+    assert issue == IssueDTO(number=7, title="bug", state="open")
+
+
 def test_missing_token_raises_invalid_token() -> None:
     adapter = HttpGitHubAdapter(token="")
     with pytest.raises(GitHubError) as exc_info:
@@ -87,10 +96,16 @@ def test_missing_token_raises_invalid_token() -> None:
     assert exc_info.value.kind == "invalid_token"
 
 
+def _http_error(code: int, headers: dict[str, str] | None = None) -> urllib.error.HTTPError:
+    msg: Message[str, str] = Message()
+    for key, value in (headers or {}).items():
+        msg[key] = value
+    return urllib.error.HTTPError("url", code, "err", msg, BytesIO(b"{}"))
+
+
 def test_http_401_surfaces_invalid_token() -> None:
     adapter = HttpGitHubAdapter(token="bad")
-    err = urllib.error.HTTPError("url", 401, "Unauthorized", {}, BytesIO(b"{}"))
-    with patch.object(adapter._opener, "open", side_effect=err):
+    with patch.object(adapter._opener, "open", side_effect=_http_error(401)):
         with pytest.raises(GitHubError) as exc_info:
             adapter.list_open_issues("o", "r")
     assert exc_info.value.kind == "invalid_token"
@@ -98,9 +113,9 @@ def test_http_401_surfaces_invalid_token() -> None:
 
 def test_http_403_rate_limited_surfaces_rate_limited() -> None:
     adapter = HttpGitHubAdapter(token="t")
-    headers = {"X-RateLimit-Remaining": "0"}
-    err = urllib.error.HTTPError("url", 403, "Forbidden", headers, BytesIO(b"{}"))
-    with patch.object(adapter._opener, "open", side_effect=err):
+    with patch.object(
+        adapter._opener, "open", side_effect=_http_error(403, {"X-RateLimit-Remaining": "0"})
+    ):
         with pytest.raises(GitHubError) as exc_info:
             adapter.list_open_pull_requests("o", "r")
     assert exc_info.value.kind == "rate_limited"

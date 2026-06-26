@@ -106,7 +106,8 @@ class HttpGitHubAdapter:
     def list_open_issues(self, owner: str, repo: str) -> list[IssueDTO]:
         url = f"https://api.github.com/repos/{owner}/{repo}/issues?state=open&per_page=100"
         data = self._request(url)
-        assert isinstance(data, list)
+        if not isinstance(data, list):
+            raise GitHubError("Unexpected non-list response from issues endpoint", kind="error")
         return [
             IssueDTO(number=item["number"], title=item["title"], state=item["state"])
             for item in data
@@ -116,7 +117,8 @@ class HttpGitHubAdapter:
     def list_open_pull_requests(self, owner: str, repo: str) -> list[PullRequestDTO]:
         url = f"https://api.github.com/repos/{owner}/{repo}/pulls?state=open&per_page=100"
         data = self._request(url)
-        assert isinstance(data, list)
+        if not isinstance(data, list):
+            raise GitHubError("Unexpected non-list response from pulls endpoint", kind="error")
         return [
             PullRequestDTO(
                 number=item["number"],
@@ -130,7 +132,8 @@ class HttpGitHubAdapter:
     def get_pull_request(self, owner: str, repo: str, number: int) -> PullRequestDTO:
         url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{number}"
         item = self._request(url)
-        assert isinstance(item, dict)
+        if not isinstance(item, dict):
+            raise GitHubError(f"Unexpected non-object response for PR {number}", kind="error")
         return PullRequestDTO(
             number=item["number"],
             title=item["title"],
@@ -141,5 +144,6 @@ class HttpGitHubAdapter:
     def get_issue(self, owner: str, repo: str, number: int) -> IssueDTO:
         url = f"https://api.github.com/repos/{owner}/{repo}/issues/{number}"
         item = self._request(url)
-        assert isinstance(item, dict)
+        if not isinstance(item, dict):
+            raise GitHubError(f"Unexpected non-object response for issue {number}", kind="error")
         return IssueDTO(number=item["number"], title=item["title"], state=item["state"])

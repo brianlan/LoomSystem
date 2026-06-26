@@ -11,10 +11,10 @@ import asyncio
 import logging
 import sqlite3
 from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
 
 from app import repositories as repos
+from app.db import get_db
 from app.github import (
     GitHubAdapter,
     GitHubError,
@@ -27,14 +27,6 @@ from app.github import (
 logger = logging.getLogger(__name__)
 
 POLL_INTERVAL_SECONDS = 60
-
-
-@dataclass
-class PollResult:
-    ok: bool
-    error: str | None
-    issues: list[IssueDTO]
-    pull_requests: list[PullRequestDTO]
 
 
 def _sync_issue_snapshots(
@@ -64,16 +56,19 @@ def _sync_issue_snapshots(
                 (issue.title, issue.state, loom_status, project_id, issue.number),
             )
     # Issues that disappeared from the open list are closed upstream -> resolved.
-    conn.execute(
-        "UPDATE github_issues SET loom_status = ?, state = 'closed', "
-        "updated_at = CURRENT_TIMESTAMP WHERE project_id = ? "
-        "AND issue_number NOT IN (%s)" % ",".join("?" * len(seen_numbers)),
-        [repos.ISSUE_STATUS_RESOLVED, project_id, *seen_numbers],
-    ) if seen_numbers else conn.execute(
-        "UPDATE github_issues SET loom_status = ?, state = 'closed', "
-        "updated_at = CURRENT_TIMESTAMP WHERE project_id = ?",
-        (repos.ISSUE_STATUS_RESOLVED, project_id),
-    )
+    if seen_numbers:
+        conn.execute(
+            "UPDATE github_issues SET loom_status = ?, state = 'closed', "
+            "updated_at = CURRENT_TIMESTAMP WHERE project_id = ? "
+            "AND issue_number NOT IN (%s)" % ",".join("?" * len(seen_numbers)),
+            [repos.ISSUE_STATUS_RESOLVED, project_id, *seen_numbers],
+        )
+    else:
+        conn.execute(
+            "UPDATE github_issues SET loom_status = ?, state = 'closed', "
+            "updated_at = CURRENT_TIMESTAMP WHERE project_id = ?",
+            (repos.ISSUE_STATUS_RESOLVED, project_id),
+        )
 
 
 def _sync_pr_snapshots(
@@ -110,20 +105,20 @@ def poll_project(
     conn: sqlite3.Connection,
     project: repos.Project,
     adapter: GitHubAdapter,
-) -> PollResult:
-    """Fetch and persist issue/PR snapshots for one project. Returns the poll result."""
+) -> tuple[bool, str | None]:
+    """Fetch and persist issue/PR snapshots for one project. Returns (ok, error)."""
     try:
         owner, repo = parse_repo_url(project.repo_url)
         issues = adapter.list_open_issues(owner, repo)
         prs = adapter.list_open_pull_requests(owner, repo)
     except GitHubError as exc:
         _record_status(conn, project.id, ok=False, error=str(exc))
-        return PollResult(ok=False, error=str(exc), issues=[], pull_requests=[])
+        return (False, str(exc))
 
     _sync_issue_snapshots(conn, project.id, issues)
     _sync_pr_snapshots(conn, project.id, prs)
     _record_status(conn, project.id, ok=True, error=None)
-    return PollResult(ok=True, error=None, issues=issues, pull_requests=prs)
+    return (True, None)
 
 
 def _record_status(
@@ -162,8 +157,6 @@ def make_adapter_factory(db_path: Path | str | None) -> AdapterFactory:
     """Return a factory that reads the app-level token/proxy from the given DB path."""
 
     def factory() -> GitHubAdapter:
-        from app.db import get_db
-
         db = get_db(db_path)
         with db.connect() as conn:
             token = repos.setting_get(conn, "github_token") or ""
@@ -184,8 +177,6 @@ class PollingService:
         self._task: asyncio.Task[None] | None = None
 
     async def _loop(self) -> None:
-        from app.db import get_db
-
         while True:
             try:
                 adapter = self._adapter_factory()

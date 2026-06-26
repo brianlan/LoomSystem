@@ -1,3 +1,5 @@
+import sqlite3
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -18,7 +20,7 @@ def db_path(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def conn(db_path: Path):
+def conn(db_path: Path) -> Iterator[sqlite3.Connection]:
     db = get_db(db_path)
     c = db.connect()
     yield c
@@ -31,43 +33,49 @@ def client(db_path: Path) -> TestClient:
     return TestClient(app)
 
 
-def _make_project(conn, name: str = "demo") -> repos.Project:
+def _make_project(conn: sqlite3.Connection, name: str = "demo") -> repos.Project:
     return repos.project_create(conn, name, "git@github.com:brianlan/demo.git")
 
 
 class _FakeAdapter:
-    def __init__(self, issues=None, prs=None, error=None) -> None:
+    def __init__(
+        self,
+        issues: list[IssueDTO] | None = None,
+        prs: list[PullRequestDTO] | None = None,
+        error: GitHubError | None = None,
+    ) -> None:
         self._issues = issues or []
         self._prs = prs or []
         self._error = error
 
-    def list_open_issues(self, owner, repo):
+    def list_open_issues(self, owner: str, repo: str) -> list[IssueDTO]:
         if self._error:
             raise self._error
         return self._issues
 
-    def list_open_pull_requests(self, owner, repo):
+    def list_open_pull_requests(self, owner: str, repo: str) -> list[PullRequestDTO]:
         if self._error:
             raise self._error
         return self._prs
 
-    def get_pull_request(self, owner, repo, number):
+    def get_pull_request(self, owner: str, repo: str, number: int) -> PullRequestDTO:
         raise NotImplementedError
 
-    def get_issue(self, owner, repo, number):
+    def get_issue(self, owner: str, repo: str, number: int) -> IssueDTO:
         raise NotImplementedError
 
 
-def test_poll_persists_issues_and_prs(conn) -> None:
+def test_poll_persists_issues_and_prs(conn: sqlite3.Connection) -> None:
     project = _make_project(conn)
     adapter = _FakeAdapter(
         issues=[IssueDTO(number=1, title="First", state="open"),
                 IssueDTO(number=3, title="Third", state="open")],
         prs=[PullRequestDTO(number=2, title="PR", state="open", merged=False)],
     )
-    result = poll_project(conn, project, adapter)
+    ok, error = poll_project(conn, project, adapter)
 
-    assert result.ok is True
+    assert ok is True
+    assert error is None
     issues = repos.github_issue_list(conn, project.id)
     assert {i.issue_number for i in issues} == {1, 3}
     assert all(i.loom_status == repos.ISSUE_STATUS_UNASSIGNED for i in issues)
@@ -77,29 +85,27 @@ def test_poll_persists_issues_and_prs(conn) -> None:
     assert status is not None and status.last_ok is True
 
 
-def test_poll_surfaces_token_failure(conn) -> None:
+def test_poll_surfaces_token_failure(conn: sqlite3.Connection) -> None:
     project = _make_project(conn)
     adapter = _FakeAdapter(error=GitHubError("bad token", kind="invalid_token"))
-    result = poll_project(conn, project, adapter)
+    ok, error = poll_project(conn, project, adapter)
 
-    assert result.ok is False
-    assert "bad token" in (result.error or "")
+    assert ok is False
+    assert error is not None and "bad token" in error
     status = repos.polling_status_get(conn, project.id)
     assert status is not None
     assert status.last_ok is False
-    assert "bad token" in (status.last_error or "")
+    assert status.last_error is not None and "bad token" in status.last_error
     # No snapshots written on failure.
     assert repos.github_issue_list(conn, project.id) == []
 
 
-def test_disappeared_issue_marked_resolved(conn) -> None:
+def test_disappeared_issue_marked_resolved(conn: sqlite3.Connection) -> None:
     project = _make_project(conn)
-    adapter = _FakeAdapter(issues=[IssueDTO(1, "One", "open")])
-    poll_project(conn, project, adapter)
+    poll_project(conn, project, _FakeAdapter(issues=[IssueDTO(1, "One", "open")]))
 
     # Next poll: issue 1 is gone (closed upstream).
-    adapter2 = _FakeAdapter(issues=[])
-    poll_project(conn, project, adapter2)
+    poll_project(conn, project, _FakeAdapter(issues=[]))
 
     issue = repos.github_issue_get(conn, project.id, 1)
     assert issue is not None
@@ -107,21 +113,23 @@ def test_disappeared_issue_marked_resolved(conn) -> None:
     assert issue.state == "closed"
 
 
-def test_reopened_issue_reenters_unassigned_pool(conn) -> None:
+def test_reopened_issue_reenters_unassigned_pool(conn: sqlite3.Connection) -> None:
     project = _make_project(conn)
     # Issue appears, then disappears (resolved).
     poll_project(conn, project, _FakeAdapter(issues=[IssueDTO(1, "One", "open")]))
     poll_project(conn, project, _FakeAdapter(issues=[]))
     issue = repos.github_issue_get(conn, project.id, 1)
+    assert issue is not None
     assert issue.loom_status == repos.ISSUE_STATUS_RESOLVED
 
     # Issue reappears as open -> reopened (D45, EC-11).
     poll_project(conn, project, _FakeAdapter(issues=[IssueDTO(1, "One", "open")]))
     issue = repos.github_issue_get(conn, project.id, 1)
+    assert issue is not None
     assert issue.loom_status == repos.ISSUE_STATUS_UNASSIGNED
 
 
-def test_existing_in_progress_status_preserved_on_repoll(conn) -> None:
+def test_existing_in_progress_status_preserved_on_repoll(conn: sqlite3.Connection) -> None:
     project = _make_project(conn)
     poll_project(conn, project, _FakeAdapter(issues=[IssueDTO(1, "One", "open")]))
     # Downstream orchestrator advances the issue to in-progress.
@@ -130,14 +138,16 @@ def test_existing_in_progress_status_preserved_on_repoll(conn) -> None:
 
     poll_project(conn, project, _FakeAdapter(issues=[IssueDTO(1, "One updated", "open")]))
     issue = repos.github_issue_get(conn, project.id, 1)
+    assert issue is not None
     assert issue.loom_status == repos.ISSUE_STATUS_IN_PROGRESS
     assert issue.title == "One updated"
 
 
-def test_pr_closed_without_merge_probe_signal(conn) -> None:
+def test_pr_closed_without_merge_probe_signal(conn: sqlite3.Connection) -> None:
     project = _make_project(conn)
     poll_project(conn, project, _FakeAdapter(prs=[PullRequestDTO(7, "PR", "open", False)]))
     pr = repos.github_pr_get(conn, project.id, 7)
+    assert pr is not None
     assert pr.merged is False
 
     # Open PR disappears from the open list -> deleted from snapshot.
@@ -145,7 +155,7 @@ def test_pr_closed_without_merge_probe_signal(conn) -> None:
     assert repos.github_pr_get(conn, project.id, 7) is None
 
 
-def test_poll_all_iterates_all_projects(conn) -> None:
+def test_poll_all_iterates_all_projects(conn: sqlite3.Connection) -> None:
     p1 = repos.project_create(conn, "a", "git@github.com:brianlan/a.git")
     p2 = repos.project_create(conn, "b", "git@github.com:brianlan/b.git")
     adapter = _FakeAdapter(issues=[IssueDTO(10, "x", "open")])
