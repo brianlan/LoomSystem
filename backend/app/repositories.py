@@ -43,6 +43,12 @@ def setting_set(conn: sqlite3.Connection, key: str, value: str) -> None:
 # ---------------------------------------------------------------------------
 
 
+DEFAULT_REVIEWER_INTERVAL_MINUTES = 15
+DEFAULT_IMPLEMENTOR_INTERVAL_MINUTES = 15
+DEFAULT_REVIEWER_CAP = 1
+DEFAULT_IMPLEMENTOR_PARALLELISM = 1
+
+
 @dataclass
 class Project:
     id: int
@@ -50,23 +56,104 @@ class Project:
     repo_url: str
     reviewer_config: dict[str, Any]
     implementor_config: dict[str, Any]
+    created_at: str
+    updated_at: str
 
 
-def project_create(conn: sqlite3.Connection, name: str, repo_url: str) -> Project:
+def _default_reviewer_config() -> dict[str, Any]:
+    return {
+        "trigger_interval_minutes": DEFAULT_REVIEWER_INTERVAL_MINUTES,
+        "reviewer_cap": DEFAULT_REVIEWER_CAP,
+    }
+
+
+def _default_implementor_config() -> dict[str, Any]:
+    return {
+        "trigger_interval_minutes": DEFAULT_IMPLEMENTOR_INTERVAL_MINUTES,
+        "parallelism": DEFAULT_IMPLEMENTOR_PARALLELISM,
+    }
+
+
+def _project_from_row(row: sqlite3.Row) -> Project:
+    return Project(
+        id=row["id"],
+        name=row["name"],
+        repo_url=row["repo_url"],
+        reviewer_config=loads(row["reviewer_config_json"]) or {},
+        implementor_config=loads(row["implementor_config_json"]) or {},
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def _validate_positive_int(value: Any, name: str) -> None:
+    if not isinstance(value, int) or value <= 0:
+        raise RepositoryError(f"{name} must be a positive integer")
+
+
+def _validate_reference_exists(
+    conn: sqlite3.Connection, table: str, entity_id: int, name: str
+) -> None:
+    row = conn.execute(f"SELECT 1 FROM {table} WHERE id = ?", (entity_id,)).fetchone()
+    if row is None:
+        raise RepositoryError(f"{name} {entity_id} does not exist")
+
+
+def _validate_project_config(
+    conn: sqlite3.Connection,
+    config: dict[str, Any],
+    agent_type: str,
+) -> None:
+    ref_keys = ("agent_definition_id", "model_entry_id", "docker_image_id")
+    has_refs = any(key in config for key in ref_keys)
+    if has_refs:
+        for key in ref_keys:
+            value = config.get(key)
+            if value is None:
+                raise RepositoryError(f"{agent_type} {key} is required")
+            if not isinstance(value, int):
+                raise RepositoryError(f"{agent_type} {key} must be an integer")
+        _validate_reference_exists(
+            conn, "agent_definitions", config["agent_definition_id"], "Agent definition"
+        )
+        _validate_reference_exists(conn, "model_entries", config["model_entry_id"], "Model entry")
+        _validate_reference_exists(conn, "docker_images", config["docker_image_id"], "Docker image")
+    if "trigger_interval_minutes" in config:
+        _validate_positive_int(config["trigger_interval_minutes"], "trigger_interval_minutes")
+    if agent_type == "reviewer" and "reviewer_cap" in config:
+        _validate_positive_int(config["reviewer_cap"], "reviewer_cap")
+    if agent_type == "implementor" and "parallelism" in config:
+        _validate_positive_int(config["parallelism"], "parallelism")
+
+
+def project_create(
+    conn: sqlite3.Connection,
+    name: str,
+    repo_url: str,
+    reviewer_config: dict[str, Any] | None = None,
+    implementor_config: dict[str, Any] | None = None,
+) -> Project:
+    if reviewer_config is not None:
+        _validate_project_config(conn, reviewer_config, "reviewer")
+    else:
+        reviewer_config = _default_reviewer_config()
+    if implementor_config is not None:
+        _validate_project_config(conn, implementor_config, "implementor")
+    else:
+        implementor_config = _default_implementor_config()
     try:
         cursor = conn.execute(
-            "INSERT INTO projects (name, repo_url) VALUES (?, ?)",
-            (name, repo_url),
+            """
+            INSERT INTO projects (name, repo_url, reviewer_config_json, implementor_config_json)
+            VALUES (?, ?, ?, ?)
+            """,
+            (name, repo_url, json.dumps(reviewer_config), json.dumps(implementor_config)),
         )
     except sqlite3.IntegrityError as exc:
         raise RepositoryError(f"Project '{name}' already exists") from exc
-    return Project(
-        id=_rowid(cursor),
-        name=name,
-        repo_url=repo_url,
-        reviewer_config={},
-        implementor_config={},
-    )
+    project = project_get(conn, _rowid(cursor))
+    assert project is not None
+    return project
 
 
 def project_get(conn: sqlite3.Connection, project_id: int) -> Project | None:
@@ -75,27 +162,54 @@ def project_get(conn: sqlite3.Connection, project_id: int) -> Project | None:
     ).fetchone()
     if not row:
         return None
-    return Project(
-        id=row["id"],
-        name=row["name"],
-        repo_url=row["repo_url"],
-        reviewer_config=loads(row["reviewer_config_json"]) or {},
-        implementor_config=loads(row["implementor_config_json"]) or {},
-    )
+    return _project_from_row(row)
 
 
 def project_list(conn: sqlite3.Connection) -> list[Project]:
     rows = conn.execute("SELECT * FROM projects ORDER BY id").fetchall()
-    return [
-        Project(
-            id=row["id"],
-            name=row["name"],
-            repo_url=row["repo_url"],
-            reviewer_config=loads(row["reviewer_config_json"]) or {},
-            implementor_config=loads(row["implementor_config_json"]) or {},
+    return [_project_from_row(row) for row in rows]
+
+
+def project_update(
+    conn: sqlite3.Connection,
+    project_id: int,
+    name: str | None = None,
+    repo_url: str | None = None,
+    reviewer_config: dict[str, Any] | None = None,
+    implementor_config: dict[str, Any] | None = None,
+) -> Project:
+    project = project_get(conn, project_id)
+    if not project:
+        raise RepositoryError(f"Project {project_id} not found")
+    new_name = name if name is not None else project.name
+    new_repo_url = repo_url if repo_url is not None else project.repo_url
+    new_reviewer = reviewer_config if reviewer_config is not None else project.reviewer_config
+    new_implementor = (
+        implementor_config if implementor_config is not None else project.implementor_config
+    )
+    _validate_project_config(conn, new_reviewer, "reviewer")
+    _validate_project_config(conn, new_implementor, "implementor")
+    try:
+        conn.execute(
+            """
+            UPDATE projects
+            SET name = ?, repo_url = ?, reviewer_config_json = ?, implementor_config_json = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (
+                new_name,
+                new_repo_url,
+                json.dumps(new_reviewer),
+                json.dumps(new_implementor),
+                project_id,
+            ),
         )
-        for row in rows
-    ]
+    except sqlite3.IntegrityError as exc:
+        raise RepositoryError(f"Project '{new_name}' already exists") from exc
+    updated = project_get(conn, project_id)
+    assert updated is not None
+    return updated
 
 
 def project_update_config(
@@ -104,22 +218,11 @@ def project_update_config(
     reviewer_config: dict[str, Any] | None = None,
     implementor_config: dict[str, Any] | None = None,
 ) -> None:
-    project = project_get(conn, project_id)
-    if not project:
-        raise RepositoryError(f"Project {project_id} not found")
-    reviewer = reviewer_config if reviewer_config is not None else project.reviewer_config
-    implementor = (
-        implementor_config if implementor_config is not None else project.implementor_config
-    )
-    conn.execute(
-        """
-        UPDATE projects
-        SET reviewer_config_json = ?,
-            implementor_config_json = ?,
-            updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-        """,
-        (json.dumps(reviewer), json.dumps(implementor), project_id),
+    project_update(
+        conn,
+        project_id,
+        reviewer_config=reviewer_config,
+        implementor_config=implementor_config,
     )
 
 
