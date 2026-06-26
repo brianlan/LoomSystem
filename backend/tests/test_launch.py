@@ -1,6 +1,7 @@
 """Tests for the Docker adapter and launch materialization service."""
 
 import sqlite3
+import subprocess
 import tempfile
 from collections.abc import Iterator
 from pathlib import Path
@@ -10,7 +11,7 @@ import pytest
 
 from app import repositories as repos
 from app.db import get_db
-from app.docker import DockerError, FakeDockerAdapter
+from app.docker import DockerError, FakeDockerAdapter, SubprocessDockerAdapter
 from app.launch import (
     LABEL_INSTANCE,
     LABEL_PROJECT,
@@ -126,6 +127,86 @@ def test_fake_exec_returns_configured() -> None:
     code, output = adapter.exec(cid, cmd)
     assert code == 1
     assert "auth failed" in output
+
+
+# ---------------------------------------------------------------------------
+# SubprocessDockerAdapter: env vars travel via a 0600 --env-file (#31)
+# ---------------------------------------------------------------------------
+
+
+def _completed(
+    args: list[str], *, returncode: int, stdout: str, stderr: str
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.CompletedProcess(
+        args=args, returncode=returncode, stdout=stdout, stderr=stderr
+    )
+
+
+def test_subprocess_run_routes_env_through_env_file() -> None:
+    """Secrets must NOT appear as -e argv; they go to a 0600 --env-file (#31)."""
+    import os
+    import stat
+
+    adapter = SubprocessDockerAdapter()
+    seen_args: list[list[str]] = []
+    seen_mode: list[int] = []
+    seen_content: list[str] = []
+
+    def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        seen_args.append(args)
+        env_file_path = args[args.index("--env-file") + 1]
+        seen_mode.append(stat.S_IMODE(os.stat(env_file_path).st_mode))
+        with open(env_file_path) as fh:
+            seen_content.append(fh.read())
+        return _completed(args, returncode=0, stdout="deadbeef\n", stderr="")
+
+    with patch("app.docker.subprocess.run", side_effect=fake_run):
+        cid = adapter.run("img", "c", {"ANTHROPIC_API_KEY": "sk-secret"}, [], {})
+
+    args = seen_args[0]
+    assert cid == "deadbeef"
+    assert "--env-file" in args
+    assert "-e" not in args
+    assert "sk-secret" not in args  # secret never in argv
+    assert seen_mode[0] == 0o600
+    assert seen_content[0] == "ANTHROPIC_API_KEY=sk-secret\n"
+    # env-file cleaned up after run
+    env_file_path = args[args.index("--env-file") + 1]
+    assert not os.path.exists(env_file_path)
+
+
+def test_subprocess_run_cleans_env_file_on_failure() -> None:
+    """docker run failure must still clean up the env-file (#31)."""
+    import os
+
+    adapter = SubprocessDockerAdapter()
+    seen_env_file: list[str] = []
+
+    def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        seen_env_file.append(args[args.index("--env-file") + 1])
+        return _completed(args, returncode=1, stdout="", stderr="boom")
+
+    with patch("app.docker.subprocess.run", side_effect=fake_run):
+        with pytest.raises(DockerError, match="docker run failed"):
+            adapter.run("img", "c", {"ANTHROPIC_API_KEY": "sk-secret"}, [], {})
+
+    assert not os.path.exists(seen_env_file[0])
+
+
+def test_subprocess_run_empty_env_uses_no_env_file() -> None:
+    """Empty env must not create an env-file or add -e (#31)."""
+    adapter = SubprocessDockerAdapter()
+    seen_args: list[list[str]] = []
+
+    def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        seen_args.append(args)
+        return _completed(args, returncode=0, stdout="cid\n", stderr="")
+
+    with patch("app.docker.subprocess.run", side_effect=fake_run):
+        adapter.run("img", "c", {}, [], {})
+
+    assert "--env-file" not in seen_args[0]
+    assert "-e" not in seen_args[0]
 
 
 # ---------------------------------------------------------------------------
