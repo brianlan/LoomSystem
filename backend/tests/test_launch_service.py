@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -27,7 +28,7 @@ def client(tmp_path: Path) -> TestClient:
 
 
 @pytest.fixture
-def registry(client: TestClient) -> dict:
+def registry(client: TestClient) -> dict[str, Any]:
     db = get_db(app.state.db.db_path)
     with db.connect() as conn:
         setting_set(
@@ -71,7 +72,7 @@ def test_container_name_and_labels() -> None:
     assert labels["loomsystem.agent_instance_id"] == "2"
 
 
-def test_launch_happy_path(client: TestClient, registry: dict, tmp_path: Path) -> None:
+def test_launch_happy_path(client: TestClient, registry: dict[str, Any], tmp_path: Path) -> None:
     service, adapter = _service(tmp_path)
     adapter.mark_image_present(registry["image_name"])
 
@@ -113,7 +114,7 @@ def test_launch_happy_path(client: TestClient, registry: dict, tmp_path: Path) -
 
 
 def test_launch_auto_pulls_missing_image(
-    client: TestClient, registry: dict, tmp_path: Path
+    client: TestClient, registry: dict[str, Any], tmp_path: Path
 ) -> None:
     service, adapter = _service(tmp_path)
     assert not adapter.image_exists(registry["image_name"])
@@ -132,7 +133,7 @@ def test_launch_auto_pulls_missing_image(
     assert any(call[0] == "pull" for call in adapter.calls)
 
 
-def test_launch_pull_failure(client: TestClient, registry: dict, tmp_path: Path) -> None:
+def test_launch_pull_failure(client: TestClient, registry: dict[str, Any], tmp_path: Path) -> None:
     service, adapter = _service(tmp_path)
     adapter.set_pull_fail()
 
@@ -158,7 +159,9 @@ def test_launch_pull_failure(client: TestClient, registry: dict, tmp_path: Path)
     assert instances[0].status == "error"
 
 
-def test_launch_ssh_clone_failure(client: TestClient, registry: dict, tmp_path: Path) -> None:
+def test_launch_ssh_clone_failure(
+    client: TestClient, registry: dict[str, Any], tmp_path: Path
+) -> None:
     service, adapter = _service(tmp_path)
     adapter.mark_image_present(registry["image_name"])
     adapter.set_default_exec_result(
@@ -181,7 +184,7 @@ def test_launch_ssh_clone_failure(client: TestClient, registry: dict, tmp_path: 
 
 
 def test_launch_model_credential_failure(
-    client: TestClient, registry: dict, tmp_path: Path
+    client: TestClient, registry: dict[str, Any], tmp_path: Path
 ) -> None:
     service, adapter = _service(tmp_path)
     adapter.mark_image_present(registry["image_name"])
@@ -212,7 +215,7 @@ def test_launch_model_credential_failure(
 
 
 def test_proxy_env_vars_only_inside_container(
-    client: TestClient, registry: dict, tmp_path: Path
+    client: TestClient, registry: dict[str, Any], tmp_path: Path
 ) -> None:
     service, adapter = _service(tmp_path)
     adapter.mark_image_present(registry["image_name"])
@@ -238,7 +241,9 @@ def test_proxy_env_vars_only_inside_container(
     assert env["HTTPS_PROXY"] == "https://proxy.example:8443"
 
 
-def test_no_proxy_env_without_settings(client: TestClient, registry: dict, tmp_path: Path) -> None:
+def test_no_proxy_env_without_settings(
+    client: TestClient, registry: dict[str, Any], tmp_path: Path
+) -> None:
     service, adapter = _service(tmp_path)
     adapter.mark_image_present(registry["image_name"])
 
@@ -260,7 +265,7 @@ def test_no_proxy_env_without_settings(client: TestClient, registry: dict, tmp_p
 
 
 def test_error_message_does_not_leak_credentials(
-    client: TestClient, registry: dict, tmp_path: Path
+    client: TestClient, registry: dict[str, Any], tmp_path: Path
 ) -> None:
     service, adapter = _service(tmp_path)
     adapter.mark_image_present(registry["image_name"])

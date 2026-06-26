@@ -5,6 +5,7 @@ import shutil
 import sqlite3
 import tempfile
 from pathlib import Path
+from typing import Any
 
 from app import repositories as repos
 from app.docker import DockerAdapter, LaunchError
@@ -147,7 +148,7 @@ class LaunchService:
         issue_number: int | None,
         repo_url: str,
         proxy: dict[str, str | None],
-    ) -> dict:
+    ) -> dict[str, Any]:
         return {
             "project_id": project_id,
             "agent_type": agent_type,
@@ -172,7 +173,7 @@ class LaunchService:
         *,
         prompt_markdown: str,
         ssh_key: str,
-        provider_config: dict,
+        provider_config: dict[str, Any],
     ) -> None:
         (workspace_dir / "agent.md").write_text(prompt_markdown)
 
