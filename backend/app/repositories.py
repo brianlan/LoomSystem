@@ -873,6 +873,19 @@ def audit_event_list(
 # ---------------------------------------------------------------------------
 
 
+@dataclass
+class TriageRun:
+    id: int
+    project_id: int
+    ranked_issue_ids: list[int]
+    input_snapshot: list[dict[str, Any]] | None
+    raw_response: str | None
+    status: str
+    attempts: int
+    error: str | None
+    created_at: str
+
+
 def triage_run_create(
     conn: sqlite3.Connection, project_id: int, ranked_issue_ids: list[int]
 ) -> int:
@@ -883,9 +896,56 @@ def triage_run_create(
     return _rowid(cursor)
 
 
-def triage_run_latest(
-    conn: sqlite3.Connection, project_id: int
-) -> list[int] | None:
+def triage_run_create_full(
+    conn: sqlite3.Connection,
+    project_id: int,
+    ranked_issue_ids: list[int],
+    input_snapshot: list[dict[str, Any]] | None = None,
+    raw_response: str | None = None,
+    status: str = "success",
+    attempts: int = 1,
+    error: str | None = None,
+) -> int:
+    cursor = conn.execute(
+        """
+        INSERT INTO triage_runs
+        (project_id, ranked_issue_ids_json, input_snapshot_json, raw_response,
+         status, attempts, error)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            project_id,
+            json.dumps(ranked_issue_ids),
+            json.dumps(input_snapshot) if input_snapshot is not None else None,
+            raw_response,
+            status,
+            attempts,
+            error,
+        ),
+    )
+    return _rowid(cursor)
+
+
+def _triage_run_from_row(row: sqlite3.Row) -> TriageRun:
+    return TriageRun(
+        id=row["id"],
+        project_id=row["project_id"],
+        ranked_issue_ids=loads(row["ranked_issue_ids_json"]) or [],
+        input_snapshot=loads(row["input_snapshot_json"]),
+        raw_response=row["raw_response"],
+        status=row["status"],
+        attempts=row["attempts"],
+        error=row["error"],
+        created_at=row["created_at"],
+    )
+
+
+def triage_run_get(conn: sqlite3.Connection, run_id: int) -> TriageRun | None:
+    row = conn.execute("SELECT * FROM triage_runs WHERE id = ?", (run_id,)).fetchone()
+    return _triage_run_from_row(row) if row else None
+
+
+def triage_run_latest(conn: sqlite3.Connection, project_id: int) -> list[int] | None:
     row = conn.execute(
         """
         SELECT ranked_issue_ids_json FROM triage_runs
@@ -894,6 +954,14 @@ def triage_run_latest(
         (project_id,),
     ).fetchone()
     return loads(row["ranked_issue_ids_json"]) if row else None
+
+
+def triage_run_latest_full(conn: sqlite3.Connection, project_id: int) -> TriageRun | None:
+    row = conn.execute(
+        "SELECT * FROM triage_runs WHERE project_id = ? ORDER BY id DESC LIMIT 1",
+        (project_id,),
+    ).fetchone()
+    return _triage_run_from_row(row) if row else None
 
 
 # ---------------------------------------------------------------------------
