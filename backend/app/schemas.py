@@ -90,3 +90,43 @@ class ProxyPayload(BaseModel):
 
 class MessageResponse(BaseModel):
     message: str
+
+
+class ReviewerConfig(BaseModel):
+    agent_definition_id: int
+    model_entry_id: int
+    docker_image_id: int
+    trigger_interval_minutes: int = 15
+    reviewer_cap: int = 1
+
+
+class ImplementorConfig(BaseModel):
+    agent_definition_id: int
+    model_entry_id: int
+    docker_image_id: int
+    trigger_interval_minutes: int = 15
+    parallelism: int = 1
+
+
+class ProjectCreate(BaseModel):
+    name: str
+    repo_url: str
+    reviewer_config: ReviewerConfig | None = None
+    implementor_config: ImplementorConfig | None = None
+
+
+class ProjectUpdate(BaseModel):
+    name: str | None = None
+    repo_url: str | None = None
+    reviewer_config: ReviewerConfig | None = None
+    implementor_config: ImplementorConfig | None = None
+
+
+class ProjectRead(BaseModel):
+    id: int
+    name: str
+    repo_url: str
+    reviewer_config: dict[str, Any]
+    implementor_config: dict[str, Any]
+    created_at: str
+    updated_at: str
