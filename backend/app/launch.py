@@ -8,6 +8,9 @@ Prepares a Docker container for a reviewer or implementor agent:
 4. Validate model credential reachability (EC-9).
 5. Persist container ID/name, labels, and a launch config snapshot.
 
+Temp credential files are cleaned up on failure; on success their directory is
+persisted in the config snapshot so T07/T13 can remove them at container teardown.
+
 opencode trigger execution (the first `opencode run`) is out of scope (T07).
 """
 
@@ -16,6 +19,7 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import shutil
 import sqlite3
 import tempfile
 from dataclasses import dataclass
@@ -78,17 +82,21 @@ def _labels(project_id: int, role: str, instance_id: int) -> dict[str, str]:
     }
 
 
-def _materialize_credential_files(
-    spec: LaunchSpec,
-) -> tuple[dict[str, str], list[str], list[Path]]:
+@dataclass(frozen=True)
+class _MaterializedCredentials:
+    env: dict[str, str]
+    volumes: list[str]
+    temp_dir: Path
+
+
+def _materialize_credential_files(spec: LaunchSpec) -> _MaterializedCredentials:
     """Write SSH key, agent markdown, and auth/opencode config to temp files.
 
-    Returns (env_vars, docker_volumes, temp_paths_to_clean).
-    Credential files are written with mode 0600 (NFR-7).
+    Credential files are written with mode 0600 (NFR-7). The temp dir is
+    returned so it can be cleaned up on failure or persisted for success-path teardown.
     """
     env: dict[str, str] = {}
     volumes: list[str] = []
-    temp_paths: list[Path] = []
 
     tmpdir = Path(tempfile.mkdtemp(prefix="loom-launch-"))
 
@@ -97,16 +105,16 @@ def _materialize_credential_files(
     ssh_path.write_text(spec.ssh_key)
     os.chmod(ssh_path, 0o600)
     volumes.append(f"{ssh_path}:/root/.ssh/id_ed25519:ro")
-    temp_paths.append(ssh_path)
 
-    # Agent markdown — written to .opencode/agents/<name>.md inside the repo (D2, FR-16c).
+    # Agent markdown — mounted at /workspace/.opencode/agents/ (sibling of the repo
+    # clone at /workspace/repo). opencode resolves agent definitions from this path (D2, FR-16c).
+    # The actual opencode invocation and WORKDIR confirmation is T07 (out of scope here).
     agent_dir = tmpdir / "agents"
     agent_dir.mkdir()
     agent_file = agent_dir / f"{spec.agent_name}.md"
     agent_file.write_text(spec.prompt_markdown)
     os.chmod(agent_file, 0o644)
     volumes.append(f"{agent_dir}:/workspace/.opencode/agents:ro")
-    temp_paths.append(agent_dir)
 
     # Model credentials — env var for built-in providers (D35).
     # Conventional pattern: <PROVIDER>_API_KEY.
@@ -118,7 +126,6 @@ def _materialize_credential_files(
         auth_path.write_text(json.dumps(spec.model_custom_config))
         os.chmod(auth_path, 0o600)
         volumes.append(f"{auth_path}:/root/.config/opencode/auth.json:ro")
-        temp_paths.append(auth_path)
 
     # Proxy env vars — container traffic only (FR-13, D15).
     if spec.http_proxy:
@@ -126,7 +133,7 @@ def _materialize_credential_files(
     if spec.https_proxy:
         env["HTTPS_PROXY"] = spec.https_proxy
 
-    return env, volumes, temp_paths
+    return _MaterializedCredentials(env=env, volumes=volumes, temp_dir=tmpdir)
 
 
 def _validate_image(adapter: DockerAdapter, image: str) -> None:
@@ -165,12 +172,22 @@ def _validate_model_credentials(
         )
 
 
+def cleanup_credential_dir(temp_dir: Path) -> None:
+    """Remove a temp credential directory after launch failure or container teardown."""
+    shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 def launch_agent(
     conn: sqlite3.Connection,
     spec: LaunchSpec,
     adapter: DockerAdapter,
 ) -> LaunchResult:
-    """Full launch sequence: preflight → container → clone → validate → persist."""
+    """Full launch sequence: preflight → container → clone → validate → persist.
+
+    On any failure after credential materialization, temp credential files are
+    cleaned up. On success, the credential dir is persisted in the config snapshot
+    so T07/T13 can remove it at container teardown.
+    """
     # --- Preflight: image availability (AC-11, EC-7) ---
     _validate_image(adapter, spec.docker_image_name)
 
@@ -186,37 +203,44 @@ def launch_agent(
 
     name = _container_name(spec.project_id, spec.agent_type)
     labels = _labels(spec.project_id, spec.agent_type, instance.id)
-    env, volumes, _temp_paths = _materialize_credential_files(spec)
+    creds = _materialize_credential_files(spec)
 
-    # --- Create+start container ---
+    container_id: str | None = None
     try:
-        container_id = adapter.run(
-            image=spec.docker_image_name,
-            name=name,
-            env=env,
-            volumes=volumes,
-            labels=labels,
-        )
-    except DockerError as exc:
-        repos.agent_instance_update(conn, instance.id, status="failed")
-        raise LaunchError(f"Failed to start container: {exc}") from exc
+        # --- Create+start container ---
+        try:
+            container_id = adapter.run(
+                image=spec.docker_image_name,
+                name=name,
+                env=creds.env,
+                volumes=creds.volumes,
+                labels=labels,
+            )
+        except DockerError as exc:
+            repos.agent_instance_update(conn, instance.id, status="failed")
+            raise LaunchError(f"Failed to start container: {exc}") from exc
 
-    # --- Clone repo via SSH (EC-8) ---
-    try:
-        _clone_repo(adapter, container_id, spec.repo_url)
+        # --- Clone repo via SSH (EC-8) ---
+        try:
+            _clone_repo(adapter, container_id, spec.repo_url)
+        except LaunchError:
+            adapter.stop(container_id)
+            adapter.remove(container_id)
+            repos.agent_instance_update(conn, instance.id, status="failed")
+            raise
+
+        # --- Validate model credentials (EC-9) ---
+        try:
+            _validate_model_credentials(adapter, container_id, spec.model_provider_id)
+        except LaunchError:
+            adapter.stop(container_id)
+            adapter.remove(container_id)
+            repos.agent_instance_update(conn, instance.id, status="failed")
+            raise
+
     except LaunchError:
-        adapter.stop(container_id)
-        adapter.remove(container_id)
-        repos.agent_instance_update(conn, instance.id, status="failed")
-        raise
-
-    # --- Validate model credentials (EC-9) ---
-    try:
-        _validate_model_credentials(adapter, container_id, spec.model_provider_id)
-    except LaunchError:
-        adapter.stop(container_id)
-        adapter.remove(container_id)
-        repos.agent_instance_update(conn, instance.id, status="failed")
+        # Clean up temp credential files on any failure (NFR-7: no secret leakage).
+        cleanup_credential_dir(creds.temp_dir)
         raise
 
     # --- Persist container metadata + launch config snapshot ---
@@ -232,6 +256,7 @@ def launch_agent(
         "container_name": name,
         "container_labels": labels,
         "repo_url": spec.repo_url,
+        "credential_dir": str(creds.temp_dir),
         "proxy": {
             "http": spec.http_proxy,
             "https": spec.https_proxy,
@@ -243,18 +268,3 @@ def launch_agent(
     )
 
     return LaunchResult(container_id=container_id, container_name=name, labels=labels)
-
-
-def cleanup_credential_files(paths: list[Path]) -> None:
-    """Remove temp credential files after launch (or on failure)."""
-    for path in paths:
-        try:
-            if path.is_dir():
-                # ponytail: shutil.rmtree would be cleaner but unlink + rmdir is stdlib-minimal
-                for child in path.iterdir():
-                    child.unlink()
-                path.rmdir()
-            else:
-                path.unlink()
-        except OSError:
-            pass

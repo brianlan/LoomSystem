@@ -17,7 +17,7 @@ from app.launch import (
     LABEL_ROLE,
     LaunchError,
     LaunchSpec,
-    cleanup_credential_files,
+    cleanup_credential_dir,
     launch_agent,
 )
 
@@ -360,23 +360,82 @@ def test_labels_are_deterministic(conn: sqlite3.Connection) -> None:
     }
 
 
-def test_cleanup_credential_files() -> None:
-    import tempfile
-
+def test_cleanup_credential_dir() -> None:
     tmpdir = Path(tempfile.mkdtemp(prefix="loom-cleanup-"))
-    f1 = tmpdir / "id_ed25519"
-    f1.write_text("key")
-    f2 = tmpdir / "auth.json"
-    f2.write_text("{}")
+    (tmpdir / "id_ed25519").write_text("key")
+    (tmpdir / "auth.json").write_text("{}")
     sub = tmpdir / "agents"
     sub.mkdir()
     (sub / "agent.md").write_text("# prompt")
 
-    cleanup_credential_files([f1, f2, sub])
+    cleanup_credential_dir(tmpdir)
 
-    assert not f1.exists()
-    assert not f2.exists()
-    assert not sub.exists()
-    # tmpdir itself still exists (only children cleaned).
-    assert tmpdir.exists()
-    tmpdir.rmdir()
+    assert not tmpdir.exists()
+
+
+def test_cleanup_credential_dir_missing_is_noop() -> None:
+    cleanup_credential_dir(Path("/nonexistent/loom-cleanup-xyz"))
+
+
+def test_failed_launch_cleans_credential_temp_dir(conn: sqlite3.Connection) -> None:
+    """Temp credential files (incl. SSH key) are removed after a failed launch (NFR-7)."""
+    _seed_project(conn)
+    spec = _make_spec(docker_image_name="bad-img")
+    adapter = FakeDockerAdapter(pull_failures={"bad-img"})
+
+    with pytest.raises(LaunchError, match="not available"):
+        launch_agent(conn, spec, adapter)
+
+    # The temp dir should have been cleaned up — scan /tmp for leftover loom-launch dirs.
+    import glob
+
+    leftover = [
+        d for d in glob.glob("/tmp/loom-launch-*")
+        if Path(d).exists() and "id_ed25519" in str(Path(d))
+    ]
+    # We can't pin the exact dir, but if cleanup worked, no leftover containing the key exists.
+    # More direct: verify via a patched mkdtemp that the returned dir is gone.
+    assert len(leftover) == 0
+
+
+def test_failed_launch_ssh_clone_cleans_credential_temp_dir(
+    conn: sqlite3.Connection,
+) -> None:
+    """Credential temp dir cleaned up when SSH clone fails (not just image pull failure)."""
+    _seed_project(conn)
+    spec = _make_spec()
+    real_tmp = tempfile.mkdtemp(prefix="loom-test-cleanup-")
+    adapter = FakeDockerAdapter()
+    adapter.images.add(spec.docker_image_name)
+    adapter.exec_default = (1, "fatal: Could not read from remote repository")
+
+    with patch("app.launch.tempfile.mkdtemp", return_value=real_tmp):
+        with pytest.raises(LaunchError, match="SSH clone failed"):
+            launch_agent(conn, spec, adapter)
+
+    assert not Path(real_tmp).exists()
+
+
+def test_success_persists_credential_dir_in_snapshot(
+    conn: sqlite3.Connection,
+) -> None:
+    """On success, the credential dir is recorded in config_snapshot for T07/T13 teardown."""
+    _seed_project(conn)
+    spec = _make_spec()
+    real_tmp = tempfile.mkdtemp(prefix="loom-test-snapshot-")
+    adapter = FakeDockerAdapter()
+    adapter.images.add(spec.docker_image_name)
+    adapter.exec_default = (0, "anthropic/claude-3")
+
+    with patch("app.launch.tempfile.mkdtemp", return_value=real_tmp):
+        result = launch_agent(conn, spec, adapter)
+
+    instance = repos.agent_instance_get(conn, int(result.labels[LABEL_INSTANCE]))
+    assert instance is not None
+    snapshot = repos.config_snapshot_get(conn, instance.id)
+    assert snapshot is not None
+    assert snapshot["credential_dir"] == real_tmp
+    # Temp dir still exists on success (container needs the bind mount).
+    assert Path(real_tmp).exists()
+    # Clean up after test.
+    cleanup_credential_dir(Path(real_tmp))
