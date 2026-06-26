@@ -590,6 +590,7 @@ class AgentInstance:
     docker_image_id: int | None
     issue_number: int | None
     container_id: str | None
+    container_name: str | None
     session_id: str | None
     status: str
 
@@ -603,14 +604,15 @@ def agent_instance_create(
     docker_image_id: int | None = None,
     issue_number: int | None = None,
     container_id: str | None = None,
+    container_name: str | None = None,
     session_id: str | None = None,
 ) -> AgentInstance:
     cursor = conn.execute(
         """
         INSERT INTO agent_instances
         (project_id, agent_type, agent_definition_id, model_entry_id, docker_image_id,
-         issue_number, container_id, session_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         issue_number, container_id, container_name, session_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             project_id,
@@ -620,6 +622,7 @@ def agent_instance_create(
             docker_image_id,
             issue_number,
             container_id,
+            container_name,
             session_id,
         ),
     )
@@ -632,17 +635,13 @@ def agent_instance_create(
         docker_image_id=docker_image_id,
         issue_number=issue_number,
         container_id=container_id,
+        container_name=container_name,
         session_id=session_id,
         status="running",
     )
 
 
-def agent_instance_get(conn: sqlite3.Connection, instance_id: int) -> AgentInstance | None:
-    row = conn.execute(
-        "SELECT * FROM agent_instances WHERE id = ?", (instance_id,)
-    ).fetchone()
-    if not row:
-        return None
+def _agent_instance_from_row(row: sqlite3.Row) -> AgentInstance:
     return AgentInstance(
         id=row["id"],
         project_id=row["project_id"],
@@ -652,9 +651,19 @@ def agent_instance_get(conn: sqlite3.Connection, instance_id: int) -> AgentInsta
         docker_image_id=row["docker_image_id"],
         issue_number=row["issue_number"],
         container_id=row["container_id"],
+        container_name=row["container_name"],
         session_id=row["session_id"],
         status=row["status"],
     )
+
+
+def agent_instance_get(conn: sqlite3.Connection, instance_id: int) -> AgentInstance | None:
+    row = conn.execute(
+        "SELECT * FROM agent_instances WHERE id = ?", (instance_id,)
+    ).fetchone()
+    if not row:
+        return None
+    return _agent_instance_from_row(row)
 
 
 def agent_instance_update(
@@ -668,6 +677,7 @@ def agent_instance_update(
         "docker_image_id",
         "issue_number",
         "container_id",
+        "container_name",
         "session_id",
         "status",
     }
@@ -688,21 +698,7 @@ def agent_instance_list_for_project(
     rows = conn.execute(
         "SELECT * FROM agent_instances WHERE project_id = ? ORDER BY id", (project_id,)
     ).fetchall()
-    return [
-        AgentInstance(
-            id=row["id"],
-            project_id=row["project_id"],
-            agent_type=row["agent_type"],
-            agent_definition_id=row["agent_definition_id"],
-            model_entry_id=row["model_entry_id"],
-            docker_image_id=row["docker_image_id"],
-            issue_number=row["issue_number"],
-            container_id=row["container_id"],
-            session_id=row["session_id"],
-            status=row["status"],
-        )
-        for row in rows
-    ]
+    return [_agent_instance_from_row(row) for row in rows]
 
 
 # ---------------------------------------------------------------------------
