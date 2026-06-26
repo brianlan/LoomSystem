@@ -35,6 +35,9 @@ def test_migrations_create_expected_tables(tmp_db: Database) -> None:
         "audit_events",
         "triage_runs",
         "notifications",
+        "github_issues",
+        "github_pull_requests",
+        "github_polling_status",
     }
     assert expected <= tables
 
@@ -45,7 +48,7 @@ def test_migrations_are_idempotent(tmp_db: Database) -> None:
     tmp_db.migrate(migrations)
     with tmp_db.connect() as conn:
         count = conn.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0]
-    assert count == 1
+    assert count == 2
 
 
 def test_database_file_is_private(tmp_path: Path) -> None:

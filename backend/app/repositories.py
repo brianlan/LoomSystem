@@ -869,6 +869,308 @@ def audit_event_list(
 
 
 # ---------------------------------------------------------------------------
+# GitHub issues
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class GitHubIssueRecord:
+    id: int
+    project_id: int
+    issue_number: int
+    title: str
+    state: str
+    is_open: bool
+    assignees: list[str]
+    labels: list[str]
+    raw: dict[str, Any]
+    loom_status: str
+    updated_at: str
+    created_at: str
+
+
+def github_issue_upsert(
+    conn: sqlite3.Connection,
+    project_id: int,
+    issue_number: int,
+    title: str,
+    state: str,
+    is_open: bool,
+    assignees: list[str],
+    labels: list[str],
+    raw: dict[str, Any],
+) -> GitHubIssueRecord:
+    conn.execute(
+        """
+        INSERT INTO github_issues
+        (project_id, issue_number, title, state, is_open, assignees_json, labels_json, raw_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(project_id, issue_number) DO UPDATE SET
+            title = excluded.title,
+            state = excluded.state,
+            is_open = excluded.is_open,
+            assignees_json = excluded.assignees_json,
+            labels_json = excluded.labels_json,
+            raw_json = excluded.raw_json,
+            updated_at = CURRENT_TIMESTAMP
+        """,
+        (
+            project_id,
+            issue_number,
+            title,
+            state,
+            1 if is_open else 0,
+            json.dumps(assignees),
+            json.dumps(labels),
+            json.dumps(raw),
+        ),
+    )
+    row = conn.execute(
+        "SELECT * FROM github_issues WHERE project_id = ? AND issue_number = ?",
+        (project_id, issue_number),
+    ).fetchone()
+    assert row is not None
+    return _github_issue_from_row(row)
+
+
+def _github_issue_from_row(row: sqlite3.Row) -> GitHubIssueRecord:
+    return GitHubIssueRecord(
+        id=row["id"],
+        project_id=row["project_id"],
+        issue_number=row["issue_number"],
+        title=row["title"],
+        state=row["state"],
+        is_open=bool(row["is_open"]),
+        assignees=loads(row["assignees_json"]) or [],
+        labels=loads(row["labels_json"]) or [],
+        raw=loads(row["raw_json"]) or {},
+        loom_status=row["loom_status"],
+        updated_at=row["updated_at"],
+        created_at=row["created_at"],
+    )
+
+
+def github_issue_list(conn: sqlite3.Connection, project_id: int) -> list[GitHubIssueRecord]:
+    rows = conn.execute(
+        "SELECT * FROM github_issues WHERE project_id = ? ORDER BY issue_number",
+        (project_id,),
+    ).fetchall()
+    return [_github_issue_from_row(row) for row in rows]
+
+
+def github_issue_get(
+    conn: sqlite3.Connection, project_id: int, issue_number: int
+) -> GitHubIssueRecord | None:
+    row = conn.execute(
+        "SELECT * FROM github_issues WHERE project_id = ? AND issue_number = ?",
+        (project_id, issue_number),
+    ).fetchone()
+    return _github_issue_from_row(row) if row else None
+
+
+def github_issue_set_loom_status(
+    conn: sqlite3.Connection,
+    project_id: int,
+    issue_number: int,
+    loom_status: str,
+) -> None:
+    conn.execute(
+        """
+        UPDATE github_issues
+        SET loom_status = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE project_id = ? AND issue_number = ?
+        """,
+        (loom_status, project_id, issue_number),
+    )
+
+
+# ---------------------------------------------------------------------------
+# GitHub pull requests
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class GitHubPullRequestRecord:
+    id: int
+    project_id: int
+    pr_number: int
+    title: str
+    state: str
+    is_open: bool
+    is_draft: bool
+    is_merged: bool
+    merged_at: str | None
+    raw: dict[str, Any]
+    updated_at: str
+    created_at: str
+
+
+def github_pr_upsert(
+    conn: sqlite3.Connection,
+    project_id: int,
+    pr_number: int,
+    title: str,
+    state: str,
+    is_open: bool,
+    is_draft: bool,
+    is_merged: bool,
+    merged_at: str | None,
+    raw: dict[str, Any],
+) -> GitHubPullRequestRecord:
+    conn.execute(
+        """
+        INSERT INTO github_pull_requests
+        (project_id, pr_number, title, state, is_open, is_draft, is_merged, merged_at, raw_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(project_id, pr_number) DO UPDATE SET
+            title = excluded.title,
+            state = excluded.state,
+            is_open = excluded.is_open,
+            is_draft = excluded.is_draft,
+            is_merged = excluded.is_merged,
+            merged_at = excluded.merged_at,
+            raw_json = excluded.raw_json,
+            updated_at = CURRENT_TIMESTAMP
+        """,
+        (
+            project_id,
+            pr_number,
+            title,
+            state,
+            1 if is_open else 0,
+            1 if is_draft else 0,
+            1 if is_merged else 0,
+            merged_at,
+            json.dumps(raw),
+        ),
+    )
+    row = conn.execute(
+        "SELECT * FROM github_pull_requests WHERE project_id = ? AND pr_number = ?",
+        (project_id, pr_number),
+    ).fetchone()
+    assert row is not None
+    return _github_pr_from_row(row)
+
+
+def _github_pr_from_row(row: sqlite3.Row) -> GitHubPullRequestRecord:
+    return GitHubPullRequestRecord(
+        id=row["id"],
+        project_id=row["project_id"],
+        pr_number=row["pr_number"],
+        title=row["title"],
+        state=row["state"],
+        is_open=bool(row["is_open"]),
+        is_draft=bool(row["is_draft"]),
+        is_merged=bool(row["is_merged"]),
+        merged_at=row["merged_at"],
+        raw=loads(row["raw_json"]) or {},
+        updated_at=row["updated_at"],
+        created_at=row["created_at"],
+    )
+
+
+def github_pr_list(conn: sqlite3.Connection, project_id: int) -> list[GitHubPullRequestRecord]:
+    rows = conn.execute(
+        "SELECT * FROM github_pull_requests WHERE project_id = ? ORDER BY pr_number",
+        (project_id,),
+    ).fetchall()
+    return [_github_pr_from_row(row) for row in rows]
+
+
+def github_pr_get(
+    conn: sqlite3.Connection, project_id: int, pr_number: int
+) -> GitHubPullRequestRecord | None:
+    row = conn.execute(
+        "SELECT * FROM github_pull_requests WHERE project_id = ? AND pr_number = ?",
+        (project_id, pr_number),
+    ).fetchone()
+    return _github_pr_from_row(row) if row else None
+
+
+# ---------------------------------------------------------------------------
+# GitHub polling status
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class GitHubPollingStatus:
+    id: int
+    project_id: int
+    last_success_at: str | None
+    last_error_at: str | None
+    last_error_message: str | None
+    updated_at: str
+    created_at: str
+
+
+def github_polling_status_upsert(
+    conn: sqlite3.Connection,
+    project_id: int,
+    success: bool = False,
+    error_message: str | None = None,
+) -> GitHubPollingStatus:
+    if success:
+        conn.execute(
+            """
+            INSERT INTO github_polling_status
+            (project_id, last_success_at, last_error_at, last_error_message)
+            VALUES (?, CURRENT_TIMESTAMP, NULL, NULL)
+            ON CONFLICT(project_id) DO UPDATE SET
+                last_success_at = CURRENT_TIMESTAMP,
+                last_error_at = NULL,
+                last_error_message = NULL,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (project_id,),
+        )
+    else:
+        conn.execute(
+            """
+            INSERT INTO github_polling_status
+            (project_id, last_success_at, last_error_at, last_error_message)
+            VALUES (?, NULL, CURRENT_TIMESTAMP, ?)
+            ON CONFLICT(project_id) DO UPDATE SET
+                last_error_at = CURRENT_TIMESTAMP,
+                last_error_message = excluded.last_error_message,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (project_id, error_message),
+        )
+    row = conn.execute(
+        "SELECT * FROM github_polling_status WHERE project_id = ?", (project_id,)
+    ).fetchone()
+    assert row is not None
+    return GitHubPollingStatus(
+        id=row["id"],
+        project_id=row["project_id"],
+        last_success_at=row["last_success_at"],
+        last_error_at=row["last_error_at"],
+        last_error_message=row["last_error_message"],
+        updated_at=row["updated_at"],
+        created_at=row["created_at"],
+    )
+
+
+def github_polling_status_get(
+    conn: sqlite3.Connection, project_id: int
+) -> GitHubPollingStatus | None:
+    row = conn.execute(
+        "SELECT * FROM github_polling_status WHERE project_id = ?", (project_id,)
+    ).fetchone()
+    if not row:
+        return None
+    return GitHubPollingStatus(
+        id=row["id"],
+        project_id=row["project_id"],
+        last_success_at=row["last_success_at"],
+        last_error_at=row["last_error_at"],
+        last_error_message=row["last_error_message"],
+        updated_at=row["updated_at"],
+        created_at=row["created_at"],
+    )
+
+
+# ---------------------------------------------------------------------------
 # Triage runs
 # ---------------------------------------------------------------------------
 

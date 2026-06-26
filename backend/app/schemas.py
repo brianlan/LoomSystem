@@ -130,3 +130,39 @@ class ProjectRead(BaseModel):
     implementor_config: dict[str, Any]
     created_at: str
     updated_at: str
+
+
+class GitHubIssueRead(BaseModel):
+    id: int
+    issue_number: int
+    title: str
+    state: str
+    is_open: bool
+    assignees: list[str]
+    labels: list[str]
+    loom_status: str
+    updated_at: str
+    created_at: str
+
+
+class GitHubPullRequestRead(BaseModel):
+    id: int
+    pr_number: int
+    title: str
+    state: str
+    is_open: bool
+    is_draft: bool
+    is_merged: bool
+    merged_at: str | None
+    updated_at: str
+    created_at: str
+
+
+class GitHubPollingStatusRead(BaseModel):
+    id: int
+    project_id: int
+    last_success_at: str | None
+    last_error_at: str | None
+    last_error_message: str | None
+    updated_at: str
+    created_at: str
