@@ -8,6 +8,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from app import repositories as repos
 from app.db import get_db
 from app.github import (
     GitHubAdapter,
@@ -228,6 +229,11 @@ def test_poll_reopened_issue_resets_loom_status(db: Any, project: Any) -> None:
         ).fetchone()
     assert issue["is_open"] == 0
     assert issue["loom_status"] == "unassigned"
+
+    # Simulate the issue having been triaged before it was reopened.
+    with db.connect() as conn:
+        repos.github_issue_set_loom_status(conn, project.id, 1, "triaged")
+        conn.commit()
 
     adapter.issues = [_issue(1, "bug", state="open")]
     poller.poll_all()

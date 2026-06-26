@@ -4,7 +4,6 @@ import asyncio
 import logging
 import sqlite3
 from contextlib import contextmanager
-from dataclasses import dataclass
 from typing import Any
 
 from app import repositories as repos
@@ -26,12 +25,6 @@ POLL_INTERVAL_SECONDS = 60
 
 class PollingError(Exception):
     pass
-
-
-@dataclass
-class PollResult:
-    issues: list[GitHubIssue]
-    prs: list[GitHubPullRequest]
 
 
 def _get_github_token(conn: sqlite3.Connection) -> str | None:
@@ -193,8 +186,15 @@ class GitHubPoller:
                         success=False,
                         error_message=str(exc),
                     )
-            except Exception:
+            except Exception as exc:
                 logger.exception("Unexpected polling error for project %s", project.id)
+                with _db_connection(self.database) as conn:
+                    repos.github_polling_status_upsert(
+                        conn,
+                        project_id=project.id,
+                        success=False,
+                        error_message=f"Unexpected error: {exc}",
+                    )
 
 
 class PollingScheduler:
