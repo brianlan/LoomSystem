@@ -64,6 +64,9 @@ class _FakeAdapter:
     def get_issue(self, owner: str, repo: str, number: int) -> IssueDTO:
         raise NotImplementedError
 
+    def update_pr(self, owner: str, repo: str, number: int, body: str) -> None:
+        raise NotImplementedError
+
 
 def test_poll_persists_issues_and_prs(conn: sqlite3.Connection) -> None:
     project = _make_project(conn)

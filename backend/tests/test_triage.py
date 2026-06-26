@@ -62,6 +62,9 @@ def _seed_project_with_issues(conn: sqlite3.Connection) -> repos.Project:
         def get_issue(self, owner: str, repo: str, number: int) -> Any:
             raise NotImplementedError
 
+        def update_pr(self, owner: str, repo: str, number: int, body: str) -> None:
+            raise NotImplementedError
+
     poll_project(conn, project, _FakeAdapter())
     conn.commit()
     return project
