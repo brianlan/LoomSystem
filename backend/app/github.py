@@ -35,6 +35,7 @@ class PullRequestDTO:
     title: str
     state: str
     merged: bool
+    body: str | None = None
 
 
 # Matches git@github.com:owner/repo(.git)? and https://github.com/owner/repo(.git)?
@@ -61,6 +62,8 @@ class GitHubAdapter(Protocol):
 
     def get_issue(self, owner: str, repo: str, number: int) -> IssueDTO: ...
 
+    def update_pr(self, owner: str, repo: str, number: int, body: str) -> None: ...
+
 
 class HttpGitHubAdapter:
     """GitHub REST API adapter backed by urllib. Uses the app-level token."""
@@ -80,14 +83,22 @@ class HttpGitHubAdapter:
         else:
             self._opener = urllib.request.build_opener()
 
-    def _request(self, url: str) -> object:
+    def _request(
+        self, url: str, method: str = "GET", json_body: dict[str, object] | None = None
+    ) -> object:
         if not self._token:
             raise GitHubError("App-level GitHub token is not configured", kind="invalid_token")
-        req = urllib.request.Request(url, headers={
-            "Authorization": f"Bearer {self._token}",
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-        })
+        data = json.dumps(json_body).encode("utf-8") if json_body is not None else None
+        req = urllib.request.Request(
+            url,
+            headers={
+                "Authorization": f"Bearer {self._token}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+            data=data,
+            method=method,
+        )
         try:
             with self._opener.open(req, timeout=self._timeout) as resp:
                 return json.loads(resp.read().decode("utf-8"))
@@ -125,6 +136,7 @@ class HttpGitHubAdapter:
                 title=item["title"],
                 state=item["state"],
                 merged=False,  # open PRs are never merged
+                body=item.get("body"),
             )
             for item in data
         ]
@@ -139,7 +151,12 @@ class HttpGitHubAdapter:
             title=item["title"],
             state=item["state"],
             merged=bool(item.get("merged")),
+            body=item.get("body"),
         )
+
+    def update_pr(self, owner: str, repo: str, number: int, body: str) -> None:
+        url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{number}"
+        self._request(url, method="PATCH", json_body={"body": body})
 
     def get_issue(self, owner: str, repo: str, number: int) -> IssueDTO:
         url = f"https://api.github.com/repos/{owner}/{repo}/issues/{number}"
