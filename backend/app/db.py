@@ -83,12 +83,14 @@ class Database:
     def reset(self) -> None:
         """Drop all user tables. Intended for tests only."""
         with self._connect() as conn:
+            conn.execute("PRAGMA foreign_keys = OFF")
             cursor = conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
             )
             tables = [row["name"] for row in cursor.fetchall()]
             for table in tables:
                 conn.execute(f"DROP TABLE IF EXISTS {table}")
+            conn.execute("PRAGMA foreign_keys = ON")
             conn.commit()
 
 
