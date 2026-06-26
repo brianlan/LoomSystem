@@ -12,12 +12,33 @@ import os
 import shlex
 import subprocess
 import tempfile
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from typing import Protocol
 
 
 class DockerError(Exception):
     """Raised when a docker CLI operation fails."""
+
+
+class ExecStream:
+    """Line-buffered stdout/stderr stream from ``docker exec``.
+
+    Iterate to consume output lines as they arrive (live console capture).
+    ``exit_code`` is populated only after the stream is fully consumed; it stays
+    ``None`` when the underlying process was lost before a clean exit, which the
+    trigger service records as an incomplete trigger (EC-1/EC-2).
+    """
+
+    def __init__(self, lines: Iterable[str], finalize: Callable[[], int | None]) -> None:
+        self._lines = lines
+        self._finalize = finalize
+        self.exit_code: int | None = None
+
+    def __iter__(self) -> Iterator[str]:
+        for line in self._lines:
+            yield line
+        self.exit_code = self._finalize()
 
 
 @dataclass(frozen=True)
@@ -45,6 +66,13 @@ class DockerAdapter(Protocol):
 
     def exec(self, container_id: str, command: list[str]) -> tuple[int, str]:
         """Run a command inside a running container. Returns (exit_code, output)."""
+
+    def exec_stream(self, container_id: str, command: list[str]) -> ExecStream:
+        """Stream a command's stdout/stderr line-by-line (live capture).
+
+        Returns an :class:`ExecStream`; iterate it for output lines and read
+        ``.exit_code`` after exhaustion. Used by the trigger service (T07).
+        """
 
     def stop(self, container_id: str) -> None: ...
 
@@ -113,6 +141,25 @@ class SubprocessDockerAdapter:
         output = (result.stdout + result.stderr).strip()
         return result.returncode, output
 
+    def exec_stream(self, container_id: str, command: list[str]) -> ExecStream:
+        try:
+            popen = subprocess.Popen(  # noqa: S603 - args list, no shell
+                ["docker", "exec", container_id, *command],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,  # line-buffered so console capture gets live chunks
+            )
+        except FileNotFoundError as exc:
+            raise DockerError("docker CLI not found on PATH") from exc
+
+        def finalize() -> int | None:
+            popen.wait()
+            return popen.returncode
+
+        assert popen.stdout is not None
+        return ExecStream(popen.stdout, finalize)
+
     def stop(self, container_id: str) -> None:
         self._run(["stop", container_id], check=False)
 
@@ -144,6 +191,15 @@ class FakeDockerAdapter:
     containers: dict[str, dict[str, str]] = field(default_factory=dict)
     exec_results: dict[tuple[str, str], tuple[int, str]] = field(default_factory=dict)
     exec_default: tuple[int, str] = (0, "")
+    # Streaming-exec results: (container_id, joined_cmd) -> (lines, exit_code|None).
+    # exit_code None models a lost/incomplete stream (EC-1/EC-2).
+    exec_stream_results: dict[tuple[str, str], tuple[list[str], int | None]] = field(
+        default_factory=dict
+    )
+    # Default streaming result used when no exact-key match exists (test affordance).
+    exec_stream_default: tuple[list[str], int | None] | None = None
+    # Records every exec_stream invocation as (container_id, command).
+    exec_stream_calls: list[tuple[str, list[str]]] = field(default_factory=list)
     _counter: int = 0
 
     def image_exists(self, image: str) -> bool:
@@ -177,6 +233,19 @@ class FakeDockerAdapter:
     def exec(self, container_id: str, command: list[str]) -> tuple[int, str]:
         key = (container_id, shlex.join(command))
         return self.exec_results.get(key, self.exec_default)
+
+    def exec_stream(self, container_id: str, command: list[str]) -> ExecStream:
+        self.exec_stream_calls.append((container_id, command))
+        key = (container_id, shlex.join(command))
+        if key in self.exec_stream_results:
+            lines, exit_code = self.exec_stream_results[key]
+        elif self.exec_stream_default is not None:
+            lines, exit_code = self.exec_stream_default
+        else:
+            code, output = self.exec_results.get(key, self.exec_default)
+            lines = [output] if output else []
+            exit_code = code
+        return ExecStream(lines, lambda: exit_code)
 
     def stop(self, container_id: str) -> None:
         if container_id in self.containers:

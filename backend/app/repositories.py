@@ -760,9 +760,11 @@ def trigger_create(conn: sqlite3.Connection, agent_instance_id: int) -> Trigger:
 def trigger_finish(
     conn: sqlite3.Connection,
     trigger_id: int,
-    exit_code: int,
+    exit_code: int | None,
     output: str,
 ) -> None:
+    # exit_code is None for an incomplete trigger (lost stream, EC-1/EC-2);
+    # a non-None value records success (0) or a failed trigger (non-zero, EC-3).
     conn.execute(
         """
         UPDATE triggers
@@ -770,6 +772,27 @@ def trigger_finish(
         WHERE id = ?
         """,
         (exit_code, output, trigger_id),
+    )
+
+
+def trigger_latest_for_instance(
+    conn: sqlite3.Connection, agent_instance_id: int
+) -> Trigger | None:
+    row = conn.execute(
+        "SELECT * FROM triggers WHERE agent_instance_id = ? ORDER BY id DESC LIMIT 1",
+        (agent_instance_id,),
+    ).fetchone()
+    return (
+        Trigger(
+            id=row["id"],
+            agent_instance_id=row["agent_instance_id"],
+            started_at=row["started_at"],
+            ended_at=row["ended_at"],
+            exit_code=row["exit_code"],
+            output=row["output"],
+        )
+        if row
+        else None
     )
 
 
