@@ -8,8 +8,10 @@ subprocess implementation wraps `docker pull/run/exec/stop/rm/inspect` via
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import subprocess
+import tempfile
 from dataclasses import dataclass, field
 from typing import Protocol
 
@@ -83,17 +85,28 @@ class SubprocessDockerAdapter:
         labels: dict[str, str],
     ) -> str:
         args = ["run", "-d", "--name", name]
-        for key, value in env.items():
-            args.extend(["-e", f"{key}={value}"])
-        for vol in volumes:
-            args.extend(["-v", vol])
-        for key, value in labels.items():
-            args.extend(["--label", f"{key}={value}"])
-        args.append(image)
-        result = self._run(args, check=False)
-        if result.returncode != 0:
-            raise DockerError(f"docker run failed: {result.stderr.strip()}")
-        return result.stdout.strip()
+        # ponytail: secrets travel through a 0600 --env-file (mkstemp) so they
+        # never appear in the host `ps` argv or `docker inspect` env block.
+        env_file: str | None = None
+        if env:
+            fd, env_file = tempfile.mkstemp(prefix="loom-env-", suffix=".env")
+            with os.fdopen(fd, "w") as fh:
+                for key, value in env.items():
+                    fh.write(f"{key}={value}\n")
+            args.extend(["--env-file", env_file])
+        try:
+            for vol in volumes:
+                args.extend(["-v", vol])
+            for key, value in labels.items():
+                args.extend(["--label", f"{key}={value}"])
+            args.append(image)
+            result = self._run(args, check=False)
+            if result.returncode != 0:
+                raise DockerError(f"docker run failed: {result.stderr.strip()}")
+            return result.stdout.strip()
+        finally:
+            if env_file:
+                os.unlink(env_file)
 
     def exec(self, container_id: str, command: list[str]) -> tuple[int, str]:
         result = self._run(["exec", container_id, *command], check=False)
