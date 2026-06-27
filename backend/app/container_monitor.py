@@ -236,6 +236,14 @@ def _handle_dead_container(
     now: float,
 ) -> None:
     """Decide whether to restart or permanently fail a dead container."""
+    # OBS-3: record the container die event before recovery.
+    repos.audit_event_create(
+        conn,
+        "container_die",
+        project_id=instance.project_id,
+        agent_instance_id=instance.id,
+        payload={"container_id": instance.container_id, "restart_count": instance.restart_count},
+    )
     new_count = _next_retry_count(instance.last_restart_at, instance.restart_count, now)
 
     if new_count > retry_cap:

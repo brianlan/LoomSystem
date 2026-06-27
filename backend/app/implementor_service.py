@@ -156,7 +156,21 @@ def terminate_implementor(
 
     if instance.container_id:
         adapter.stop(instance.container_id)
+        repos.audit_event_create(
+            conn,
+            "container_stop",
+            project_id=instance.project_id,
+            agent_instance_id=agent_instance_id,
+            payload={"container_id": instance.container_id},
+        )
         adapter.remove(instance.container_id)
+        repos.audit_event_create(
+            conn,
+            "container_remove",
+            project_id=instance.project_id,
+            agent_instance_id=agent_instance_id,
+            payload={"container_id": instance.container_id},
+        )
 
     snapshot = repos.config_snapshot_get(conn, agent_instance_id)
     if snapshot and snapshot.get("credential_dir"):

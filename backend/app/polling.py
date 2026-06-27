@@ -56,6 +56,27 @@ def _sync_issue_snapshots(
                 (issue.title, issue.state, loom_status, project_id, issue.number),
             )
     # Issues that disappeared from the open list are closed upstream -> resolved.
+    # OBS-1/FR-35: record an issue-close audit event + "issue resolved" notification.
+    closed = conn.execute(
+        "SELECT issue_number, title FROM github_issues WHERE project_id = ? AND state = 'open'",
+        (project_id,),
+    ).fetchall()
+    closed_numbers = [
+        r["issue_number"] for r in closed if r["issue_number"] not in seen_numbers
+    ]
+    for issue_number in closed_numbers:
+        title = next((r["title"] for r in closed if r["issue_number"] == issue_number), "")
+        repos.audit_event_create(
+            conn,
+            "issue_closed",
+            project_id=project_id,
+            payload={"issue_number": issue_number, "title": title},
+        )
+        repos.notification_create(
+            conn,
+            message=f"Issue #{issue_number} resolved for project {project_id}",
+            project_id=project_id,
+        )
     if seen_numbers:
         conn.execute(
             "UPDATE github_issues SET loom_status = ?, state = 'closed', "
@@ -84,6 +105,18 @@ def _sync_pr_snapshots(
                 "INSERT INTO github_prs (project_id, pr_number, title, state, merged) "
                 "VALUES (?, ?, ?, ?, ?)",
                 (project_id, pr.number, pr.title, pr.state, int(pr.merged)),
+            )
+            # OBS-1/FR-35: record a PR-opened audit event + notification.
+            repos.audit_event_create(
+                conn,
+                "pr_opened",
+                project_id=project_id,
+                payload={"pr_number": pr.number, "title": pr.title},
+            )
+            repos.notification_create(
+                conn,
+                message=f"PR #{pr.number} opened for project {project_id}",
+                project_id=project_id,
             )
         else:
             conn.execute(

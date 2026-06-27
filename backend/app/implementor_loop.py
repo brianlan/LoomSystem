@@ -52,6 +52,13 @@ def _get_state(conn: sqlite3.Connection, project_id: int) -> str:
 
 def _set_state(conn: sqlite3.Connection, project_id: int, state: str) -> None:
     repos.setting_set(conn, f"{SETTING_KEY}:{project_id}", state)
+    # OBS-1: record every state transition.
+    repos.audit_event_create(
+        conn,
+        "state_transition",
+        project_id=project_id,
+        payload={"to": state},
+    )
 
 
 def _eligible_issues(
