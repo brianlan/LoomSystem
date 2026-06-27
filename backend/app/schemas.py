@@ -151,3 +151,28 @@ class ReviewerStatus(BaseModel):
     reviewer_cap: int
     running_reviewers: int
     reviewers: list[ReviewerInstanceStatus]
+
+
+class ImplementorLaunchRequest(BaseModel):
+    issue_number: int
+
+
+class ImplementorLaunchResult(BaseModel):
+    agent_instance_id: int
+    container_id: str
+    container_name: str
+
+
+class ImplementorInstanceStatus(BaseModel):
+    agent_instance_id: int
+    issue_number: int | None
+    container_id: str | None
+    container_name: str | None
+    status: str
+
+
+class ImplementorStatus(BaseModel):
+    project_id: int
+    state: str
+    running_implementors: int
+    implementors: list[ImplementorInstanceStatus]

@@ -1,15 +1,17 @@
 import { useState } from 'react'
 import { Dashboard } from './components/Dashboard'
 import { Notices } from './components/Notices'
+import { Operator } from './components/Operator'
 import { Projects } from './components/Projects'
 import { Settings } from './components/Settings'
 import './app.css'
 
-type Tab = 'dashboard' | 'projects' | 'settings'
+type Tab = 'dashboard' | 'projects' | 'operator' | 'settings'
 
 const TABS: { id: Tab; label: string }[] = [
   { id: 'dashboard', label: 'Dashboard' },
   { id: 'projects', label: 'Projects' },
+  { id: 'operator', label: 'Operator' },
   { id: 'settings', label: 'Settings' },
 ]
 
@@ -35,6 +37,7 @@ function App() {
       <main>
         {tab === 'dashboard' && <Dashboard />}
         {tab === 'projects' && <Projects />}
+        {tab === 'operator' && <Operator />}
         {tab === 'settings' && <Settings />}
       </main>
     </div>
