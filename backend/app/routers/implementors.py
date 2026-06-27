@@ -11,7 +11,6 @@ from typing import NoReturn
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from app import cleanup_service as cleanup_svc
 from app import implementor_loop as loop
 from app import implementor_service as svc
 from app import repositories as repos
@@ -159,22 +158,4 @@ def implementor_status(
     }
 
 
-# Preserve backwards-compatible project-level hard-kill endpoint (T12).
-# The loop-level hard-stop above is the preferred T17 control surface.
-@router.post("/hard-kill", response_model=schemas.MessageResponse)
-def hard_kill_implementors(
-    project_id: int,
-    request: Request,
-    conn: sqlite3.Connection = Depends(get_db_conn),
-) -> dict[str, str]:
-    _ensure_project(conn, project_id)
-    try:
-        result = cleanup_svc.hard_kill_implementors(
-            conn, project_id, _get_docker_adapter(request)
-        )
-    except cleanup_svc.CleanupError as exc:
-        msg = str(exc)
-        if "not found" in msg.lower():
-            raise HTTPException(status_code=404, detail=msg) from exc
-        raise HTTPException(status_code=422, detail=msg) from exc
-    return {"message": f"Hard-killed {len(result.killed_instance_ids)} implementor(s)"}
+

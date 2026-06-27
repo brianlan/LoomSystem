@@ -235,17 +235,12 @@ describe('Operator', () => {
   it('shows console history and live stream for a selected agent', async () => {
     statusState.hasReviewer = true
     statusState.reviewerRunning = 1
-    const history: MockRoute = {
-      match: (url) => url === '/api/v1/agents/11/console/history',
-      respond: () =>
-        Promise.resolve(json([{ chunk_index: 0, content: 'hello', created_at: '2026-01-01' }])),
-    }
+    // Console history is replayed over SSE; no separate GET history fetch.
     original = installFetch([
       PROJECTS,
       REVIEWER_STATUS,
       IMPLEMENTOR_STATUS,
       NOTIFICATIONS,
-      history,
       AUDIT,
     ])
     render(<Operator />)
@@ -253,12 +248,17 @@ describe('Operator', () => {
     fireEvent.change(screen.getByLabelText('Project'), { target: { value: '7' } })
     await waitFor(() => expect(screen.getByText('#11')).toBeInTheDocument())
     fireEvent.click(screen.getByText('#11'))
-    await waitFor(() => expect(screen.getByText(/hello/)).toBeInTheDocument())
 
     const es = FakeEventSource.instances.find((i) => i.url.endsWith('/agents/11/console/stream'))
     expect(es).toBeDefined()
-    es?.emit({ chunk_index: 1, content: 'world' })
+    // SSE replays persisted history first.
+    es?.emit({ chunk_index: 0, content: 'hello', created_at: '2026-01-01' })
+    await waitFor(() => expect(screen.getByText(/hello/)).toBeInTheDocument())
+    // Then live chunks arrive.
+    es?.emit({ chunk_index: 1, content: 'world', created_at: '2026-01-01' })
     await waitFor(() => expect(screen.getByText(/world/)).toBeInTheDocument())
+    // History must not be duplicated by a separate fetch.
+    expect(screen.getAllByText(/hello/).length).toBe(1)
   })
 
   it('shows audit events and notifications', async () => {
@@ -269,10 +269,6 @@ describe('Operator', () => {
       REVIEWER_STATUS,
       IMPLEMENTOR_STATUS,
       NOTIFICATIONS,
-      {
-        match: (url) => url === '/api/v1/agents/11/console/history',
-        respond: () => Promise.resolve(json([])),
-      },
       AUDIT,
     ])
     render(<Operator />)

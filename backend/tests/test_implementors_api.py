@@ -211,21 +211,6 @@ def test_hard_stop_terminates_running_implementors(
     assert status_after["running_implementors"] == 0
 
 
-def test_hard_kill_implementors_backwards_compatible(
-    client: TestClient, registry_ids: dict[str, int]
-) -> None:
-    project_id = _create_project(client, registry_ids)
-    db = get_db(app.state.db.db_path)
-    with db.connect() as conn:
-        _seed_issue(conn, project_id, 2)
-        conn.commit()
-
-    client.post(f"/api/v1/projects/{project_id}/implementors", json={"issue_number": 2})
-    resp = client.post(f"/api/v1/projects/{project_id}/implementors/hard-kill")
-    assert resp.status_code == 200
-    assert "1 implementor(s)" in resp.json()["message"]
-
-
 def test_status_missing_project(client: TestClient) -> None:
     resp = client.get("/api/v1/projects/999/implementors/status")
     assert resp.status_code == 404

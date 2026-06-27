@@ -263,22 +263,22 @@ function ImplementorPanel({
 }
 
 export function ConsoleView({ instanceId }: { instanceId: number }) {
-  const { state } = useAsync(() => api.getConsoleHistory(instanceId), [instanceId])
-  const [live, setLive] = useState<ConsoleChunk[]>([])
+  const [chunks, setChunks] = useState<ConsoleChunk[]>([])
   const [connected, setConnected] = useState(false)
   const [streamError, setStreamError] = useState('')
   const listRef = useRef<HTMLUListElement>(null)
 
   useEffect(() => {
-    setLive([])
+    setChunks([])
     setStreamError('')
+    setConnected(false)
     const url = `/api/v1/agents/${instanceId}/console/stream`
     const es = new EventSource(url)
     es.onopen = () => setConnected(true)
     es.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data) as ConsoleChunk
-        setLive((prev) => [...prev, data])
+        setChunks((prev) => [...prev, data])
       } catch {
         // ignore malformed event data
       }
@@ -295,31 +295,19 @@ export function ConsoleView({ instanceId }: { instanceId: number }) {
 
   useEffect(() => {
     listRef.current?.lastElementChild?.scrollIntoView?.({ behavior: 'smooth' })
-  }, [live])
-
-  const all = useMemo(() => {
-    const chunks = state.status === 'success' ? state.data : []
-    return [
-      ...chunks.map((c) => ({ ...c, source: 'history' as const })),
-      ...live.map((c) => ({ ...c, source: 'live' as const })),
-    ]
-  }, [state, live])
+  }, [chunks])
 
   return (
     <div className="console-view">
       <h4>Console #{instanceId}</h4>
-      {!connected && !streamError && state.status !== 'loading' && (
-        <p className="muted">Connecting…</p>
-      )}
+      {!connected && !streamError && <p className="muted">Connecting…</p>}
       {streamError && <ErrorBanner message={streamError} />}
-      {state.status === 'loading' && <Loading />}
-      {state.status === 'error' && <ErrorBanner message={state.error} />}
-      {all.length === 0 ? (
+      {connected && chunks.length === 0 ? (
         <EmptyState>No console output yet.</EmptyState>
       ) : (
         <ul className="console-lines" ref={listRef}>
-          {all.map((c, idx) => (
-            <li key={`${c.source}-${idx}`} className={c.source === 'live' ? 'live' : undefined}>
+          {chunks.map((c, idx) => (
+            <li key={idx}>
               <span className="muted">[{c.chunk_index}]</span> {c.content}
             </li>
           ))}
