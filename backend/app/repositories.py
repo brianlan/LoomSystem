@@ -593,6 +593,8 @@ class AgentInstance:
     container_name: str | None
     session_id: str | None
     status: str
+    restart_count: int = 0
+    last_restart_at: str | None = None
 
 
 def agent_instance_create(
@@ -654,6 +656,8 @@ def _agent_instance_from_row(row: sqlite3.Row) -> AgentInstance:
         container_name=row["container_name"],
         session_id=row["session_id"],
         status=row["status"],
+        restart_count=row["restart_count"],
+        last_restart_at=row["last_restart_at"],
     )
 
 
@@ -680,6 +684,8 @@ def agent_instance_update(
         "container_name",
         "session_id",
         "status",
+        "restart_count",
+        "last_restart_at",
     }
     fields = {k: v for k, v in kwargs.items() if k in allowed}
     if not fields:
@@ -697,6 +703,13 @@ def agent_instance_list_for_project(
 ) -> list[AgentInstance]:
     rows = conn.execute(
         "SELECT * FROM agent_instances WHERE project_id = ? ORDER BY id", (project_id,)
+    ).fetchall()
+    return [_agent_instance_from_row(row) for row in rows]
+
+
+def agent_instance_list_running(conn: sqlite3.Connection) -> list[AgentInstance]:
+    rows = conn.execute(
+        "SELECT * FROM agent_instances WHERE status = 'running' ORDER BY id"
     ).fetchall()
     return [_agent_instance_from_row(row) for row in rows]
 
