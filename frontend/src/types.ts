@@ -84,6 +84,76 @@ export interface AggregateStatus {
   }>
 }
 
+export interface ReviewerLaunchResult {
+  agent_instance_id: number
+  container_id: string
+  container_name: string
+}
+
+export interface ReviewerInstanceStatus {
+  agent_instance_id: number
+  container_id: string | null
+  container_name: string | null
+  session_id: string | null
+  status: string
+}
+
+export interface ReviewerStatus {
+  project_id: number
+  reviewer_cap: number
+  running_reviewers: number
+  reviewers: ReviewerInstanceStatus[]
+}
+
+export interface ImplementorLaunchRequest {
+  issue_number: number
+}
+
+export interface ImplementorLaunchResult {
+  agent_instance_id: number
+  container_id: string
+  container_name: string
+}
+
+export interface ImplementorInstanceStatus {
+  agent_instance_id: number
+  issue_number: number | null
+  container_id: string | null
+  container_name: string | null
+  status: string
+}
+
+export interface ImplementorStatus {
+  project_id: number
+  state: string
+  running_implementors: number
+  implementors: ImplementorInstanceStatus[]
+}
+
+export interface ConsoleChunk {
+  chunk_index: number
+  content: string
+  created_at: string
+}
+
+export interface AuditEvent {
+  id: number
+  project_id: number | null
+  agent_instance_id: number | null
+  event_type: string
+  payload: Record<string, unknown>
+  created_at: string
+}
+
+export interface Notification {
+  id: number
+  project_id: number | null
+  agent_instance_id: number | null
+  message: string
+  is_read: boolean
+  created_at: string
+}
+
 export interface TriageConfig {
   endpoint_url: string
   model_name: string

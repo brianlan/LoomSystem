@@ -3,13 +3,21 @@
 import type {
   AgentDefinition,
   AggregateStatus,
+  AuditEvent,
+  ConsoleChunk,
   DockerImage,
   GitHubIssue,
   GitHubPullRequest,
+  ImplementorLaunchRequest,
+  ImplementorLaunchResult,
+  ImplementorStatus,
   ModelEntry,
+  Notification,
   PollingStatus,
   Project,
   ProxyConfig,
+  ReviewerLaunchResult,
+  ReviewerStatus,
   TriageConfig,
 } from './types'
 
@@ -139,3 +147,55 @@ export const setProxy = (body: unknown) =>
 export const getProxy = () => req<ProxyConfig>('/settings/proxy')
 export const deleteProxy = () =>
   req<{ message: string }>('/settings/proxy', { method: 'DELETE' })
+
+// --- Reviewer controls ---
+export const launchReviewer = (projectId: number) =>
+  req<ReviewerLaunchResult>(`/projects/${projectId}/reviewers/launch`, { method: 'POST' })
+export const triggerReviewer = (projectId: number, instanceId: number) =>
+  req<{ message: string }>(`/projects/${projectId}/reviewers/${instanceId}/trigger`, {
+    method: 'POST',
+  })
+export const terminateReviewer = (projectId: number, instanceId: number) =>
+  req<{ message: string }>(`/projects/${projectId}/reviewers/${instanceId}/terminate`, {
+    method: 'POST',
+  })
+export const getReviewerStatus = (projectId: number) =>
+  req<ReviewerStatus>(`/projects/${projectId}/reviewers/status`)
+
+// --- Implementor controls ---
+export const launchImplementor = (projectId: number, body: ImplementorLaunchRequest) =>
+  req<ImplementorLaunchResult>(`/projects/${projectId}/implementors`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+export const terminateImplementor = (projectId: number, instanceId: number) =>
+  req<{ message: string }>(`/projects/${projectId}/implementors/${instanceId}/terminate`, {
+    method: 'POST',
+  })
+export const startImplementorLoop = (projectId: number) =>
+  req<{ message: string }>(`/projects/${projectId}/implementors/loop/start`, { method: 'POST' })
+export const softStopImplementorLoop = (projectId: number) =>
+  req<{ message: string }>(`/projects/${projectId}/implementors/loop/soft-stop`, { method: 'POST' })
+export const hardStopImplementorLoop = (projectId: number) =>
+  req<{ message: string }>(`/projects/${projectId}/implementors/loop/hard-stop`, { method: 'POST' })
+export const getImplementorStatus = (projectId: number) =>
+  req<ImplementorStatus>(`/projects/${projectId}/implementors/status`)
+
+// --- Console ---
+export const getConsoleHistory = (instanceId: number) =>
+  req<ConsoleChunk[]>(`/agents/${instanceId}/console/history`)
+
+// --- Audit trail ---
+export const listAuditEvents = () => req<AuditEvent[]>('/audit')
+export const listProjectAuditEvents = (projectId: number) =>
+  req<AuditEvent[]>(`/projects/${projectId}/audit`)
+export const listAgentAuditEvents = (instanceId: number) =>
+  req<AuditEvent[]>(`/agents/${instanceId}/audit`)
+
+// --- Notifications ---
+export const listNotifications = (unreadOnly = false) =>
+  req<Notification[]>(`/notifications?unread_only=${unreadOnly}`)
+export const listProjectNotifications = (projectId: number, unreadOnly = false) =>
+  req<Notification[]>(`/projects/${projectId}/notifications?unread_only=${unreadOnly}`)
+export const markNotificationRead = (id: number) =>
+  req<{ message: string }>(`/notifications/${id}/read`, { method: 'POST' })

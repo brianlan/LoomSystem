@@ -9,7 +9,17 @@ from app.container_monitor import ContainerMonitor, recover_on_startup
 from app.dependencies import DBState
 from app.docker import SubprocessDockerAdapter
 from app.polling import PollingService, make_adapter_factory
-from app.routers import audit, console, github, notifications, projects, reviewers, settings, status
+from app.routers import (
+    audit,
+    console,
+    github,
+    implementors,
+    notifications,
+    projects,
+    reviewers,
+    settings,
+    status,
+)
 from app.trigger import TriggerService
 
 
@@ -25,7 +35,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     trigger_service = getattr(app.state, "trigger_service", None) or TriggerService(adapter)
 
     # T13: reconnect to surviving containers, record abandoned triggers, resume schedules.
-    with app.state.db.connect() as conn:
+    with app.state.db.get_connection() as conn:
         recover_on_startup(conn, adapter, trigger_service)
         conn.commit()
 
@@ -58,6 +68,7 @@ app.include_router(settings.router)
 app.include_router(projects.router)
 app.include_router(github.router)
 app.include_router(reviewers.router)
+app.include_router(implementors.router)
 app.include_router(console.router)
 app.include_router(audit.router)
 app.include_router(notifications.router)
