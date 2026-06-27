@@ -82,7 +82,7 @@ def _create_project(client: TestClient, registry_ids: dict[str, int], name: str 
     payload["name"] = name
     resp = client.post("/api/v1/projects", json=payload)
     assert resp.status_code == 201
-    return resp.json()["id"]
+    return int(resp.json()["id"])
 
 
 def test_launch_implementor_success(
