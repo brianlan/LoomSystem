@@ -9,7 +9,17 @@ from app.container_monitor import ContainerMonitor, recover_on_startup
 from app.dependencies import DBState
 from app.docker import SubprocessDockerAdapter
 from app.polling import PollingService, make_adapter_factory
-from app.routers import audit, console, github, implementors, notifications, projects, reviewers, settings, status
+from app.routers import (
+    audit,
+    console,
+    github,
+    implementors,
+    notifications,
+    projects,
+    reviewers,
+    settings,
+    status,
+)
 from app.trigger import TriggerService
 
 

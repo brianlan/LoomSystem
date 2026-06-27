@@ -12,7 +12,6 @@ from fastapi.testclient import TestClient
 from app import repositories as repos
 from app.db import get_db
 from app.docker import FakeDockerAdapter
-from app.github import IssueDTO
 from app.main import app
 
 _IMAGE = "loomsystem/runtime:latest"
