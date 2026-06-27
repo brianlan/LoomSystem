@@ -177,6 +177,70 @@ def cleanup_credential_dir(temp_dir: Path) -> None:
     shutil.rmtree(temp_dir, ignore_errors=True)
 
 
+@dataclass(frozen=True)
+class ContainerCreateResult:
+    container_id: str
+    container_name: str
+    labels: dict[str, str]
+    credential_dir: Path
+
+
+def create_agent_container(
+    spec: LaunchSpec,
+    adapter: DockerAdapter,
+    name: str,
+    labels: dict[str, str],
+    creds: _MaterializedCredentials | None = None,
+) -> ContainerCreateResult:
+    """Create+start a container, clone repo, validate credentials.
+
+    If ``creds`` is supplied it is reused (restart path); otherwise fresh
+    credential files are materialized. On failure the container is removed and
+    temp files are cleaned up. Returns the new container id plus metadata.
+    """
+    fresh_creds = creds is None
+    creds = creds or _materialize_credential_files(spec)
+
+    container_id: str | None = None
+    try:
+        try:
+            container_id = adapter.run(
+                image=spec.docker_image_name,
+                name=name,
+                env=creds.env,
+                volumes=creds.volumes,
+                labels=labels,
+            )
+        except DockerError as exc:
+            raise LaunchError(f"Failed to start container: {exc}") from exc
+
+        try:
+            _clone_repo(adapter, container_id, spec.repo_url)
+        except LaunchError:
+            adapter.stop(container_id)
+            adapter.remove(container_id)
+            raise
+
+        try:
+            _validate_model_credentials(adapter, container_id, spec.model_provider_id)
+        except LaunchError:
+            adapter.stop(container_id)
+            adapter.remove(container_id)
+            raise
+
+    except LaunchError:
+        if fresh_creds:
+            cleanup_credential_dir(creds.temp_dir)
+        raise
+
+    return ContainerCreateResult(
+        container_id=container_id,
+        container_name=name,
+        labels=labels,
+        credential_dir=creds.temp_dir,
+    )
+
+
 def launch_agent(
     conn: sqlite3.Connection,
     spec: LaunchSpec,
@@ -203,44 +267,11 @@ def launch_agent(
 
     name = _container_name(spec.project_id, spec.agent_type)
     labels = _labels(spec.project_id, spec.agent_type, instance.id)
-    creds = _materialize_credential_files(spec)
 
-    container_id: str | None = None
     try:
-        # --- Create+start container ---
-        try:
-            container_id = adapter.run(
-                image=spec.docker_image_name,
-                name=name,
-                env=creds.env,
-                volumes=creds.volumes,
-                labels=labels,
-            )
-        except DockerError as exc:
-            repos.agent_instance_update(conn, instance.id, status="failed")
-            raise LaunchError(f"Failed to start container: {exc}") from exc
-
-        # --- Clone repo via SSH (EC-8) ---
-        try:
-            _clone_repo(adapter, container_id, spec.repo_url)
-        except LaunchError:
-            adapter.stop(container_id)
-            adapter.remove(container_id)
-            repos.agent_instance_update(conn, instance.id, status="failed")
-            raise
-
-        # --- Validate model credentials (EC-9) ---
-        try:
-            _validate_model_credentials(adapter, container_id, spec.model_provider_id)
-        except LaunchError:
-            adapter.stop(container_id)
-            adapter.remove(container_id)
-            repos.agent_instance_update(conn, instance.id, status="failed")
-            raise
-
+        result = create_agent_container(spec, adapter, name, labels)
     except LaunchError:
-        # Clean up temp credential files on any failure (NFR-7: no secret leakage).
-        cleanup_credential_dir(creds.temp_dir)
+        repos.agent_instance_update(conn, instance.id, status="failed")
         raise
 
     # --- Persist container metadata + launch config snapshot ---
@@ -253,10 +284,10 @@ def launch_agent(
         "model_id": spec.model_id,
         "docker_image_id": spec.docker_image_id,
         "docker_image_name": spec.docker_image_name,
-        "container_name": name,
-        "container_labels": labels,
+        "container_name": result.container_name,
+        "container_labels": result.labels,
         "repo_url": spec.repo_url,
-        "credential_dir": str(creds.temp_dir),
+        "credential_dir": str(result.credential_dir),
         "proxy": {
             "http": spec.http_proxy,
             "https": spec.https_proxy,
@@ -264,7 +295,14 @@ def launch_agent(
     }
     repos.config_snapshot_create(conn, instance.id, config_snapshot)
     repos.agent_instance_update(
-        conn, instance.id, container_id=container_id, container_name=name
+        conn,
+        instance.id,
+        container_id=result.container_id,
+        container_name=result.container_name,
     )
 
-    return LaunchResult(container_id=container_id, container_name=name, labels=labels)
+    return LaunchResult(
+        container_id=result.container_id,
+        container_name=result.container_name,
+        labels=result.labels,
+    )
