@@ -11,3 +11,4 @@ from app.main import app
 
 def pytest_configure(config: Any) -> None:
     app.state.polling_enabled = False
+    app.state.monitoring_enabled = False

@@ -131,6 +131,13 @@ class TriggerScheduler:
     def release(self, agent_instance_id: int) -> None:
         self._in_progress.discard(agent_instance_id)
 
+    def seed(self, agent_instance_id: int) -> None:
+        """Resume scheduling for an agent after backend restart.
+
+        Next fire is treated as restart time + interval (T13).
+        """
+        self._last_start[agent_instance_id] = self._clock()
+
     @property
     def in_progress(self) -> frozenset[int]:
         return frozenset(self._in_progress)
@@ -152,6 +159,11 @@ class TriggerService:
     @property
     def scheduler(self) -> TriggerScheduler:
         return self._scheduler
+
+    def seed_running(self, conn: sqlite3.Connection) -> None:
+        """Seed scheduler last-start times for all running agent instances."""
+        for inst in repos.agent_instance_list_running(conn):
+            self._scheduler.seed(inst.id)
 
     def is_due(self, req: TriggerRequest) -> bool:
         return self._scheduler.is_due(req.agent_instance_id, req.interval_minutes)
