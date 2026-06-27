@@ -92,11 +92,13 @@ def _build_spec_for_instance(
     )
 
 
-def _new_retry_count(last_restart_at: str | None, now: float) -> int | None:
+def _next_retry_count(
+    last_restart_at: str | None, current_count: int, now: float
+) -> int:
     """Return the retry count to record for a restart happening now.
 
     If the previous restart was outside the retry window, start a new burst at 1.
-    Otherwise the burst continues and the caller must check the cap.
+    Otherwise the burst continues from the existing count.
     """
     if last_restart_at is None:
         return 1
@@ -107,7 +109,7 @@ def _new_retry_count(last_restart_at: str | None, now: float) -> int | None:
         return 1
     if (now - prev) > RETRY_WINDOW_SECONDS:
         return 1
-    return None  # caller should increment existing count
+    return current_count + 1
 
 
 def _parse_sqlite_timestamp(value: str) -> float:
@@ -234,13 +236,12 @@ def _handle_dead_container(
     now: float,
 ) -> None:
     """Decide whether to restart or permanently fail a dead container."""
-    new_count = _new_retry_count(instance.last_restart_at, now)
-    if new_count is None:
-        new_count = instance.restart_count + 1
+    new_count = _next_retry_count(instance.last_restart_at, instance.restart_count, now)
 
     if new_count > retry_cap:
         _mark_failed(conn, instance, f"retry cap ({retry_cap}) exceeded within window")
         return
+
 
     repos.agent_instance_update(
         conn,

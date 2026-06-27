@@ -89,6 +89,12 @@ def _launch(
     return instance
 
 
+def _cid(instance: repos.AgentInstance) -> str:
+    """Narrow container_id to a non-None str for adapter calls."""
+    assert instance.container_id is not None
+    return instance.container_id
+
+
 # ---------------------------------------------------------------------------
 # Monitor: unexpected container death restart
 # ---------------------------------------------------------------------------
@@ -97,7 +103,7 @@ def _launch(
 def test_relaunch_agent_returns_true_and_updates_container(conn: sqlite3.Connection) -> None:
     adapter = FakeDockerAdapter()
     instance = _launch(conn, adapter)
-    original_cid = instance.container_id
+    original_cid = _cid(instance)
 
     adapter.containers[original_cid]["state"] = "exited"
     assert relaunch_agent(conn, instance.id, adapter) is True
@@ -111,7 +117,7 @@ def test_relaunch_agent_returns_true_and_updates_container(conn: sqlite3.Connect
 def test_monitor_restarts_dead_container(conn: sqlite3.Connection) -> None:
     adapter = FakeDockerAdapter()
     instance = _launch(conn, adapter)
-    original_cid = instance.container_id
+    original_cid = _cid(instance)
 
     adapter.containers[original_cid]["state"] = "exited"
     check_containers(conn, adapter, now=time.time())
@@ -161,7 +167,7 @@ def test_monitor_marks_failed_after_retry_cap_exceeded(conn: sqlite3.Connection)
         last_restart_at=_recent_timestamp(),
     )
 
-    adapter.containers[instance.container_id]["state"] = "exited"
+    adapter.containers[_cid(instance)]["state"] = "exited"
     check_containers(conn, adapter, now=time.time())
 
     refreshed = repos.agent_instance_get(conn, instance.id)
@@ -182,7 +188,7 @@ def test_monitor_resets_retry_count_outside_window(conn: sqlite3.Connection) -> 
         last_restart_at="2020-01-01 00:00:00",
     )
 
-    adapter.containers[instance.container_id]["state"] = "exited"
+    adapter.containers[_cid(instance)]["state"] = "exited"
     check_containers(conn, adapter, now=time.time())
 
     refreshed = repos.agent_instance_get(conn, instance.id)
@@ -206,7 +212,7 @@ def test_permanent_failure_creates_notification_and_audit(conn: sqlite3.Connecti
         restart_count=DEFAULT_RETRY_CAP,
         last_restart_at=_recent_timestamp(),
     )
-    adapter.containers[instance.container_id]["state"] = "exited"
+    adapter.containers[_cid(instance)]["state"] = "exited"
 
     check_containers(conn, adapter, now=time.time())
 
@@ -239,7 +245,7 @@ def test_permanent_failure_requeues_implementor_issue(conn: sqlite3.Connection) 
         restart_count=DEFAULT_RETRY_CAP,
         last_restart_at=_recent_timestamp(),
     )
-    adapter.containers[instance.container_id]["state"] = "exited"
+    adapter.containers[_cid(instance)]["state"] = "exited"
 
     check_containers(conn, adapter, now=time.time())
 
@@ -272,7 +278,7 @@ def test_startup_recovery_reconnects_surviving_container(conn: sqlite3.Connectio
 def test_startup_recovery_restarts_missing_container(conn: sqlite3.Connection) -> None:
     adapter = FakeDockerAdapter()
     instance = _launch(conn, adapter)
-    adapter.remove(instance.container_id)
+    adapter.remove(_cid(instance))
     trigger_service = TriggerService(adapter)
 
     recover_on_startup(conn, adapter, trigger_service, now=time.time())
