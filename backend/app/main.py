@@ -25,7 +25,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     trigger_service = getattr(app.state, "trigger_service", None) or TriggerService(adapter)
 
     # T13: reconnect to surviving containers, record abandoned triggers, resume schedules.
-    with app.state.db.connect() as conn:
+    with app.state.db.get_connection() as conn:
         recover_on_startup(conn, adapter, trigger_service)
         conn.commit()
 
