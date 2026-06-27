@@ -272,6 +272,16 @@ def launch_agent(
         result = create_agent_container(spec, adapter, name, labels)
     except LaunchError:
         repos.agent_instance_update(conn, instance.id, status="failed")
+        # FR-35: surface permanent agent failures (launch never succeeded).
+        repos.notification_create(
+            conn,
+            message=(
+                f"{spec.agent_type.capitalize()} launch failed for project "
+                f"{spec.project_id}"
+            ),
+            project_id=spec.project_id,
+            agent_instance_id=instance.id,
+        )
         raise
 
     # --- Persist container metadata + launch config snapshot ---
@@ -299,6 +309,14 @@ def launch_agent(
         instance.id,
         container_id=result.container_id,
         container_name=result.container_name,
+    )
+    # OBS-3: container lifecycle — create+start (adapter.run is atomic).
+    repos.audit_event_create(
+        conn,
+        "container_start",
+        project_id=spec.project_id,
+        agent_instance_id=instance.id,
+        payload={"container_id": result.container_id, "container_name": result.container_name},
     )
 
     return LaunchResult(

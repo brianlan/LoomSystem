@@ -184,7 +184,21 @@ def terminate_reviewer(
 
     if instance.container_id:
         adapter.stop(instance.container_id)
+        repos.audit_event_create(
+            conn,
+            "container_stop",
+            project_id=instance.project_id,
+            agent_instance_id=agent_instance_id,
+            payload={"container_id": instance.container_id},
+        )
         adapter.remove(instance.container_id)
+        repos.audit_event_create(
+            conn,
+            "container_remove",
+            project_id=instance.project_id,
+            agent_instance_id=agent_instance_id,
+            payload={"container_id": instance.container_id},
+        )
 
     # Clean up temp credential files persisted during launch.
     snapshot = repos.config_snapshot_get(conn, agent_instance_id)

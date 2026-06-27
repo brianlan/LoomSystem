@@ -9,7 +9,7 @@ from app.container_monitor import ContainerMonitor, recover_on_startup
 from app.dependencies import DBState
 from app.docker import SubprocessDockerAdapter
 from app.polling import PollingService, make_adapter_factory
-from app.routers import console, github, projects, reviewers, settings
+from app.routers import audit, console, github, notifications, projects, reviewers, settings, status
 from app.trigger import TriggerService
 
 
@@ -59,6 +59,9 @@ app.include_router(projects.router)
 app.include_router(github.router)
 app.include_router(reviewers.router)
 app.include_router(console.router)
+app.include_router(audit.router)
+app.include_router(notifications.router)
+app.include_router(status.router)
 
 
 @app.get("/health")

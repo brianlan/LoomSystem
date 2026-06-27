@@ -1202,3 +1202,69 @@ def polling_status_get(conn: sqlite3.Connection, project_id: int) -> PollingStat
         last_ok=bool(row["last_ok"]),
         last_error=row["last_error"],
     )
+
+
+# ---------------------------------------------------------------------------
+# Aggregate dashboard status (OBS-5)
+# ---------------------------------------------------------------------------
+
+
+def aggregate_status(conn: sqlite3.Connection) -> dict[str, Any]:
+    """Top-level dashboard status: running counts, recent failures, backlog size.
+
+    OBS-5: surface running counts, recent failures, and backlog size. Backlog =
+    open issues still in the 'unassigned' pool across all projects. Recent
+    failures = the latest failed triage runs and failed agent instances.
+    """
+    instances = conn.execute("SELECT agent_type, status FROM agent_instances").fetchall()
+    running_reviewers = sum(
+        1 for r in instances if r["agent_type"] == "reviewer" and r["status"] == "running"
+    )
+    running_implementors = sum(
+        1 for r in instances if r["agent_type"] == "implementor" and r["status"] == "running"
+    )
+
+    backlog_row = conn.execute(
+        "SELECT COUNT(*) AS n FROM github_issues WHERE state = 'open' AND loom_status = ?",
+        (ISSUE_STATUS_UNASSIGNED,),
+    ).fetchone()
+    backlog_size = int(backlog_row["n"]) if backlog_row else 0
+
+    failed_triage = conn.execute(
+        "SELECT id, project_id, error, created_at FROM triage_runs "
+        "WHERE status = 'failed' ORDER BY id DESC LIMIT 10"
+    ).fetchall()
+    failed_instances = conn.execute(
+        "SELECT id, project_id, agent_type, created_at FROM agent_instances "
+        "WHERE status = 'failed' ORDER BY id DESC LIMIT 10"
+    ).fetchall()
+
+    failures: list[dict[str, Any]] = [
+        {
+            "kind": "triage",
+            "id": r["id"],
+            "project_id": r["project_id"],
+            "error": r["error"],
+            "created_at": r["created_at"],
+        }
+        for r in failed_triage
+    ]
+    failures += [
+        {
+            "kind": "agent",
+            "id": r["id"],
+            "project_id": r["project_id"],
+            "agent_type": r["agent_type"],
+            "created_at": r["created_at"],
+        }
+        for r in failed_instances
+    ]
+    # ponytail: in-memory sort keeps the query simple; capped at 20 rows total.
+    failures.sort(key=lambda f: f["created_at"], reverse=True)
+
+    return {
+        "running_reviewers": running_reviewers,
+        "running_implementors": running_implementors,
+        "backlog_size": backlog_size,
+        "recent_failures": failures,
+    }
