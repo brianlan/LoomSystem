@@ -43,23 +43,27 @@ _FAKE_SSH_KEY = (
 
 
 class _FakeGitHubAdapter:
-    def __init__(self, issues=None, prs=None):
+    def __init__(
+        self,
+        issues: list[IssueDTO] | None = None,
+        prs: list[PullRequestDTO] | None = None,
+    ) -> None:
         self._issues = issues or []
         self._prs = prs or []
 
-    def list_open_issues(self, owner, repo):
+    def list_open_issues(self, owner: str, repo: str) -> list[IssueDTO]:
         return self._issues
 
-    def list_open_pull_requests(self, owner, repo):
+    def list_open_pull_requests(self, owner: str, repo: str) -> list[PullRequestDTO]:
         return self._prs
 
-    def get_pull_request(self, owner, repo, number):
+    def get_pull_request(self, owner: str, repo: str, number: int) -> PullRequestDTO:
         raise NotImplementedError
 
-    def get_issue(self, owner, repo, number):
+    def get_issue(self, owner: str, repo: str, number: int) -> IssueDTO:
         raise NotImplementedError
 
-    def update_pr(self, owner, repo, number, body):
+    def update_pr(self, owner: str, repo: str, number: int, body: str) -> None:
         raise NotImplementedError
 
 

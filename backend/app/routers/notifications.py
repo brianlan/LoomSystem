@@ -41,8 +41,7 @@ def mark_notification_read(
     notification_id: int,
     conn: sqlite3.Connection = Depends(get_db_conn),
 ) -> dict[str, str]:
-    existing = repos.notification_list(conn)
-    if not any(n["id"] == notification_id for n in existing):
+    if not repos.notification_exists(conn, notification_id):
         raise HTTPException(status_code=404, detail="Notification not found")
     repos.notification_mark_read(conn, notification_id)
     return {"message": f"Notification {notification_id} marked read"}

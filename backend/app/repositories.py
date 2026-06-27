@@ -1068,6 +1068,13 @@ def notification_list(
     ]
 
 
+def notification_exists(conn: sqlite3.Connection, notification_id: int) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM notifications WHERE id = ?", (notification_id,)
+    ).fetchone()
+    return row is not None
+
+
 def notification_mark_read(conn: sqlite3.Connection, notification_id: int) -> None:
     conn.execute(
         "UPDATE notifications SET is_read = 1 WHERE id = ?",
