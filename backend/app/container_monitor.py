@@ -196,7 +196,7 @@ def relaunch_agent(
         "container_labels": result.labels,
         "credential_dir": str(result.credential_dir),
     }
-    repos.config_snapshot_create(conn, instance.id, new_snapshot)
+    repos.config_snapshot_update(conn, instance.id, new_snapshot)
     repos.agent_instance_update(
         conn,
         instance.id,
@@ -263,7 +263,7 @@ def check_containers(
     now: float | None = None,
 ) -> None:
     """Inspect all running agent containers and recover any that are dead."""
-    now = now if now is not None else time.monotonic()
+    now = now if now is not None else time.time()
     for instance in repos.agent_instance_list_running(conn):
         info = _inspect_or_missing(adapter, instance.container_id)
         if info is not None and info.state == "running":
@@ -286,7 +286,7 @@ class ContainerMonitor:
         *,
         retry_cap: int = DEFAULT_RETRY_CAP,
         interval_seconds: float = MONITOR_INTERVAL_SECONDS,
-        clock: Callable[[], float] = time.monotonic,
+        clock: Callable[[], float] = time.time,
     ) -> None:
         from app.db import get_db
 
@@ -373,7 +373,7 @@ def recover_on_startup(
     - Restarts missing/dead containers when under the retry cap.
     - Resumes trigger scheduling from restart time + interval.
     """
-    now = now if now is not None else time.monotonic()
+    now = now if now is not None else time.time()
     _record_abandoned_triggers(conn)
     for instance in repos.agent_instance_list_running(conn):
         info = _inspect_or_missing(adapter, instance.container_id)

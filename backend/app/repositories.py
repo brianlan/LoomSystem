@@ -739,6 +739,15 @@ def config_snapshot_get(
     return loads(row["snapshot_json"]) if row else None
 
 
+def config_snapshot_update(
+    conn: sqlite3.Connection, agent_instance_id: int, snapshot: dict[str, Any]
+) -> None:
+    conn.execute(
+        "UPDATE config_snapshots SET snapshot_json = ? WHERE agent_instance_id = ?",
+        (json.dumps(snapshot), agent_instance_id),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Triggers
 # ---------------------------------------------------------------------------
