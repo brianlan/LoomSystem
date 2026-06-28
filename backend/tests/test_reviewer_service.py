@@ -164,6 +164,40 @@ def test_launch_reviewer_missing_ssh_key(conn: sqlite3.Connection) -> None:
         svc.launch_reviewer(conn, project.id, adapter)
 
 
+def test_launch_reviewer_image_preflight_failure(conn: sqlite3.Connection) -> None:
+    project = _seed_project(conn)
+    adapter = FakeDockerAdapter(pull_failures={_IMAGE})
+
+    with pytest.raises(svc.ReviewerError, match="not available"):
+        svc.launch_reviewer(conn, project.id, adapter)
+
+    assert len(adapter.containers) == 0
+    running = sum(
+        1
+        for inst in repos.agent_instance_list_for_project(conn, project.id)
+        if inst.agent_type == "reviewer" and inst.status == "running"
+    )
+    assert running == 0
+
+
+def test_launch_reviewer_model_preflight_failure(conn: sqlite3.Connection) -> None:
+    project = _seed_project(conn)
+    adapter = FakeDockerAdapter()
+    adapter.images.add(_IMAGE)
+    adapter.exec_default = (0, "openai/gpt-4")
+
+    with pytest.raises(svc.ReviewerError, match="Credential missing for provider 'anthropic'"):
+        svc.launch_reviewer(conn, project.id, adapter)
+
+    assert len(adapter.containers) == 0
+    running = sum(
+        1
+        for inst in repos.agent_instance_list_for_project(conn, project.id)
+        if inst.agent_type == "reviewer" and inst.status == "running"
+    )
+    assert running == 0
+
+
 def test_launch_reviewer_missing_agent_definition(conn: sqlite3.Connection) -> None:
     project = _seed_project(conn)
     # Bypass repo validation to simulate a stale/orphaned FK reference.
@@ -439,3 +473,17 @@ def test_api_status_empty(seeded_client: TestClient) -> None:
 def test_api_launch_project_not_found(seeded_client: TestClient) -> None:
     resp = seeded_client.post("/api/v1/projects/9999/reviewers/launch")
     assert resp.status_code == 404
+
+
+def test_api_launch_reviewer_image_preflight_failure(seeded_client: TestClient) -> None:
+    pid = _project_id(seeded_client)
+    adapter: FakeDockerAdapter = app.state.docker_adapter
+    adapter.images.clear()
+    adapter.pull_failures.add(_IMAGE)
+
+    resp = seeded_client.post(f"/api/v1/projects/{pid}/reviewers/launch")
+    assert resp.status_code == 422
+    assert "not available" in resp.json()["detail"].lower()
+
+    status_resp = seeded_client.get(f"/api/v1/projects/{pid}/reviewers/status")
+    assert status_resp.json()["running_reviewers"] == 0

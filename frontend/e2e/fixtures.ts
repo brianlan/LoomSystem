@@ -248,10 +248,81 @@ export async function mockGitHubLists(
   )
 }
 
+export type ReviewerStatus = {
+  project_id: number
+  reviewer_cap: number
+  running_reviewers: number
+  reviewers: Array<{
+    agent_instance_id: number
+    container_id: string
+    container_name: string
+    session_id: string | null
+    status: string
+  }>
+}
+
+export type ImplementorStatus = {
+  project_id: number
+  state: string
+  running_implementors: number
+  implementors: Array<{
+    agent_instance_id: number
+    issue_number: number | null
+    container_id: string
+    container_name: string
+    status: string
+  }>
+}
+
 export async function mockApiError(page: Page, method: string, path: string, detail: string, status = 500) {
   await route(page, method, path, (route) =>
     route.fulfill({ status, body: JSON.stringify({ detail }) }),
   )
+}
+
+export async function mockReviewerStatus(page: Page, projectId: number, status: ReviewerStatus) {
+  await route(page, 'GET', `/projects/${projectId}/reviewers/status`, (route) =>
+    route.fulfill({ status: 200, body: JSON.stringify(status) }),
+  )
+}
+
+export async function mockImplementorStatus(page: Page, projectId: number, status: ImplementorStatus) {
+  await route(page, 'GET', `/projects/${projectId}/implementors/status`, (route) =>
+    route.fulfill({ status: 200, body: JSON.stringify(status) }),
+  )
+}
+
+export async function mockReviewerLaunchError(
+  page: Page,
+  projectId: number,
+  detail: string,
+  status = 422,
+) {
+  await route(page, 'POST', `/projects/${projectId}/reviewers/launch`, (route) =>
+    route.fulfill({ status, body: JSON.stringify({ detail }) }),
+  )
+}
+
+export async function mockImplementorLaunchError(
+  page: Page,
+  projectId: number,
+  detail: string,
+  status = 422,
+) {
+  await route(page, 'POST', `/projects/${projectId}/implementors`, (route) =>
+    route.fulfill({ status, body: JSON.stringify({ detail }) }),
+  )
+}
+
+export async function mockEmptyNotifications(page: Page, projectId?: number) {
+  await route(page, 'GET', '/notifications?unread_only=false', (route) =>
+    route.fulfill({ status: 200, body: JSON.stringify([]) }),
+  )
+  if (projectId !== undefined) {
+    await route(page, 'GET', `/projects/${projectId}/notifications?unread_only=false`, (route) =>
+      route.fulfill({ status: 200, body: JSON.stringify([]) }),
+    )
+  }
 }
 
 export async function goToSettings(page: Page) {
