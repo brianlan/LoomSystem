@@ -445,8 +445,86 @@ export async function mockImplementorLifecycle(
   return state
 }
 
-export async function mockEmptyNotifications(page: Page, projectId: number) {
-  await page.route(`${BASE}/projects/${projectId}/notifications?**`, (route) =>
+export type ReviewerState = {
+  reviewer_cap: number
+  reviewers: Array<{
+    agent_instance_id: number
+    container_id: string
+    container_name: string
+    session_id: string | null
+    status: string
+  }>
+}
+
+export async function mockReviewerLifecycle(
+  page: Page,
+  projectId: number,
+  initial: ReviewerState = { reviewer_cap: 1, reviewers: [] },
+) {
+  const state = { ...initial, reviewers: [...initial.reviewers] }
+  let nextId = 101
+
+  await page.route(`${BASE}/projects/${projectId}/reviewers/status`, (route) =>
+    route.fulfill({
+      status: 200,
+      body: JSON.stringify({
+        project_id: projectId,
+        reviewer_cap: state.reviewer_cap,
+        running_reviewers: state.reviewers.filter((r) => r.status === 'running').length,
+        reviewers: state.reviewers,
+      }),
+    }),
+  )
+
+  await route(page, 'POST', `/projects/${projectId}/reviewers/launch`, (route) => {
+    const instanceId = nextId++
+    const reviewer = {
+      agent_instance_id: instanceId,
+      container_id: `container-${instanceId}`,
+      container_name: `reviewer-${instanceId}`,
+      session_id: `session-${instanceId}`,
+      status: 'running',
+    }
+    state.reviewers.push(reviewer)
+    route.fulfill({
+      status: 200,
+      body: JSON.stringify({
+        agent_instance_id: instanceId,
+        container_id: reviewer.container_id,
+        container_name: reviewer.container_name,
+      }),
+    })
+  })
+
+  await page.route(new RegExp(`${BASE}/projects/${projectId}/reviewers/(\\d+)/trigger`), (route) =>
+    route.fulfill({ status: 200, body: JSON.stringify({ message: 'Triggered' }) }),
+  )
+
+  await page.route(new RegExp(`${BASE}/projects/${projectId}/reviewers/(\\d+)/terminate`), (route) => {
+    const match = route.request().url().match(/\/reviewers\/(\d+)\/terminate/)
+    const id = match ? Number(match[1]) : 0
+    state.reviewers = state.reviewers.filter((r) => r.agent_instance_id !== id)
+    route.fulfill({ status: 200, body: JSON.stringify({ message: 'Terminated' }) })
+  })
+
+  return state
+}
+
+export async function mockEmptyAuditEvents(page: Page, instanceId: number) {
+  await route(page, 'GET', `/agents/${instanceId}/audit`, (route) =>
     route.fulfill({ status: 200, body: JSON.stringify([]) }),
   )
+}
+
+export type ConsoleChunk = {
+  chunk_index: number
+  content: string
+  created_at: string
+}
+
+export async function mockConsoleStream(page: Page, instanceId: number, chunks: ConsoleChunk[]) {
+  await page.route(`${BASE}/agents/${instanceId}/console/stream`, (route) => {
+    const body = chunks.map((c) => `data: ${JSON.stringify(c)}\n\n`).join('') + '\n'
+    route.fulfill({ status: 200, contentType: 'text/event-stream', body })
+  })
 }
