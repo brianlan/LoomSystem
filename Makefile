@@ -27,6 +27,9 @@ frontend-lint:
 frontend-typecheck:
 	cd frontend && npm run typecheck
 
+frontend-test-e2e:
+	cd frontend && npm run test:e2e
+
 frontend-run:
 	cd frontend && npm run dev
 
