@@ -63,6 +63,7 @@ Frontend only:
 make frontend-test
 make frontend-lint
 make frontend-typecheck
+make frontend-test-e2e   # or: cd frontend && npm run test:e2e
 ```
 
 ## Project Structure
