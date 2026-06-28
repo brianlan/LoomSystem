@@ -265,6 +265,40 @@ def test_launch_image_pull_failure_rejected(conn: sqlite3.Connection) -> None:
         launch_agent(conn, spec, adapter)
 
 
+def test_launch_image_preflight_failure_does_not_create_container(
+    conn: sqlite3.Connection,
+) -> None:
+    _seed_project(conn)
+    spec = _make_spec(docker_image_name="missing-img")
+    adapter = FakeDockerAdapter(pull_failures={"missing-img"})
+
+    with pytest.raises(LaunchError, match="not available"):
+        launch_agent(conn, spec, adapter)
+
+    assert len(adapter.containers) == 0
+
+
+def test_launch_model_credential_opencode_models_fails(
+    conn: sqlite3.Connection,
+) -> None:
+    _seed_project(conn)
+    spec = _make_spec()
+
+    class _FailingModelsAdapter(FakeDockerAdapter):
+        def exec(self, container_id: str, command: list[str]) -> tuple[int, str]:
+            if command == ["opencode", "models"]:
+                return (1, "auth failed")
+            return super().exec(container_id, command)
+
+    adapter = _FailingModelsAdapter()
+    adapter.images.add(spec.docker_image_name)
+
+    with pytest.raises(LaunchError, match="Model credential validation failed"):
+        launch_agent(conn, spec, adapter)
+
+    assert len(adapter.containers) == 0
+
+
 def test_launch_ssh_clone_failure_marks_failed_and_removes(
     conn: sqlite3.Connection,
 ) -> None:

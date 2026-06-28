@@ -231,6 +231,40 @@ def test_launch_implementor_missing_ssh_key(conn: sqlite3.Connection) -> None:
         svc.launch_implementor(conn, project.id, 1, adapter)
 
 
+def test_launch_implementor_image_preflight_failure(conn: sqlite3.Connection) -> None:
+    project = _seed_project(conn)
+    adapter = FakeDockerAdapter(pull_failures={_IMAGE})
+
+    with pytest.raises(svc.ImplementorError, match="not available"):
+        svc.launch_implementor(conn, project.id, 1, adapter)
+
+    assert len(adapter.containers) == 0
+    running = sum(
+        1
+        for inst in repos.agent_instance_list_for_project(conn, project.id)
+        if inst.agent_type == "implementor" and inst.status == "running"
+    )
+    assert running == 0
+
+
+def test_launch_implementor_model_preflight_failure(conn: sqlite3.Connection) -> None:
+    project = _seed_project(conn)
+    adapter = FakeDockerAdapter()
+    adapter.images.add(_IMAGE)
+    adapter.exec_default = (0, "openai/gpt-4")
+
+    with pytest.raises(svc.ImplementorError, match="Credential missing for provider 'anthropic'"):
+        svc.launch_implementor(conn, project.id, 1, adapter)
+
+    assert len(adapter.containers) == 0
+    running = sum(
+        1
+        for inst in repos.agent_instance_list_for_project(conn, project.id)
+        if inst.agent_type == "implementor" and inst.status == "running"
+    )
+    assert running == 0
+
+
 # ---------------------------------------------------------------------------
 # Terminate tests
 # ---------------------------------------------------------------------------
