@@ -4,11 +4,12 @@ import {
   mockEmptyNotifications,
   mockEmptyReviewerStatus,
   mockImplementorLifecycle,
-  mockProjectList,
-  type ProjectFixture,
+  mockProjectMutations,
+  mockProjects,
+  type Project,
 } from './fixtures'
 
-const project: ProjectFixture = {
+const project: Project = {
   id: 1,
   name: 'loom-demo',
   repo_url: 'git@github.com:owner/repo.git',
@@ -41,7 +42,7 @@ async function openOperator(page: Page) {
 }
 
 test('implementor loop starts and shows N parallel implementors', async ({ page }) => {
-  await mockProjectList(page, [project])
+  await mockProjects(page, [project])
   await mockEmptyReviewerStatus(page, 1)
   await mockImplementorLifecycle(
     page,
@@ -63,7 +64,7 @@ test('implementor loop starts and shows N parallel implementors', async ({ page 
 })
 
 test('issue close/refill visible behavior', async ({ page }) => {
-  await mockProjectList(page, [{ ...project, implementor_config: { ...project.implementor_config, parallelism: 1 } }])
+  await mockProjects(page, [{ ...project, implementor_config: { ...project.implementor_config, parallelism: 1 } }])
   await mockEmptyReviewerStatus(page, 1)
   const state = await mockImplementorLifecycle(page, 1, {
     state: 'running',
@@ -85,7 +86,7 @@ test('issue close/refill visible behavior', async ({ page }) => {
   await expect(panel.getByText('issue #1')).toBeVisible()
 
   await page.route(new RegExp('/api/v1/projects/1/implementors/(\\d+)/terminate'), (route) => {
-    if (route.request().method() !== 'POST') return route.continue()
+    if (route.request().method() !== 'POST') return route.fallback()
     state.implementors = state.implementors.filter((i) => i.agent_instance_id !== 201)
     state.implementors.push({
       agent_instance_id: 202,
@@ -94,7 +95,7 @@ test('issue close/refill visible behavior', async ({ page }) => {
       container_name: 'implementor-202',
       status: 'running',
     })
-    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ message: 'Terminated' }) })
+    return route.fulfill({ status: 200, body: JSON.stringify({ message: 'Terminated' }) })
   })
 
   await panel.getByRole('button', { name: 'Terminate' }).click()
@@ -103,7 +104,7 @@ test('issue close/refill visible behavior', async ({ page }) => {
 })
 
 test('soft stop prevents new launches while existing implementors remain visible', async ({ page }) => {
-  await mockProjectList(page, [{ ...project, implementor_config: { ...project.implementor_config, parallelism: 1 } }])
+  await mockProjects(page, [{ ...project, implementor_config: { ...project.implementor_config, parallelism: 1 } }])
   await mockEmptyReviewerStatus(page, 1)
   await mockImplementorLifecycle(page, 1, {
     state: 'running',
@@ -129,7 +130,7 @@ test('soft stop prevents new launches while existing implementors remain visible
 })
 
 test('hard stop terminates running implementors', async ({ page }) => {
-  await mockProjectList(page, [{ ...project, implementor_config: { ...project.implementor_config, parallelism: 1 } }])
+  await mockProjects(page, [{ ...project, implementor_config: { ...project.implementor_config, parallelism: 1 } }])
   await mockEmptyReviewerStatus(page, 1)
   await mockImplementorLifecycle(page, 1, {
     state: 'running',
@@ -156,7 +157,9 @@ test('hard stop terminates running implementors', async ({ page }) => {
 })
 
 test('project deletion removes project and running-agent UI state', async ({ page }) => {
-  await mockProjectList(page, [project])
+  const projects: Project[] = [project]
+  await mockProjects(page, projects)
+  await mockProjectMutations(page, { projects })
   await mockEmptyReviewerStatus(page, 1)
   await mockImplementorLifecycle(page, 1, {
     state: 'running',
@@ -187,9 +190,9 @@ test('project deletion removes project and running-agent UI state', async ({ pag
 })
 
 test('implementor launch surfaces an API error', async ({ page }) => {
-  await mockProjectList(page, [{ ...project, implementor_config: { ...project.implementor_config, parallelism: 1 } }])
+  await mockProjects(page, [{ ...project, implementor_config: { ...project.implementor_config, parallelism: 1 } }])
   await mockEmptyReviewerStatus(page, 1)
-  await mockApiError(page, 'POST', '/api/v1/projects/1/implementors')
+  await mockApiError(page, 'POST', '/projects/1/implementors', 'Server error')
   await mockEmptyNotifications(page, 1)
 
   await openOperator(page)
