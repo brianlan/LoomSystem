@@ -253,9 +253,9 @@ export function Projects() {
     refetch()
   }
 
-  async function update(_name: string, _repoUrl: string, reviewer: Record<string, unknown>, implementor: Record<string, unknown>) {
+  async function update(name: string, repoUrl: string, reviewer: Record<string, unknown>, implementor: Record<string, unknown>) {
     if (!editing) return
-    await api.updateProject(editing.id, { reviewer_config: reviewer, implementor_config: implementor })
+    await api.updateProject(editing.id, { name, repo_url: repoUrl, reviewer_config: reviewer, implementor_config: implementor })
     setEditing(null)
     refetch()
   }
