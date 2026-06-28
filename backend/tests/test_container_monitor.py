@@ -19,7 +19,7 @@ from app.container_monitor import (
 from app.db import get_db
 from app.docker import FakeDockerAdapter
 from app.launch import LABEL_INSTANCE, LaunchSpec, launch_agent
-from app.trigger import TriggerService
+from app.trigger import TriggerService, trigger_request_for_instance
 
 
 @pytest.fixture
@@ -314,6 +314,35 @@ def test_startup_recovery_seeds_trigger_scheduler(conn: sqlite3.Connection) -> N
 
     # Seeded agent is not immediately due (next fire = restart time + interval).
     assert not trigger_service.scheduler.is_due(instance.id, interval_minutes=15)
+
+
+def test_startup_recovery_console_capture_continues(conn: sqlite3.Connection) -> None:
+    """AC-9: console chunk indices continue across a backend restart/recovery."""
+    adapter = FakeDockerAdapter()
+    instance = _launch(conn, adapter)
+    trigger_service = TriggerService(adapter)
+
+    adapter.exec_stream_default = (["before1\n", "before2\n"], 0)
+    req = trigger_request_for_instance(conn, instance.id, prompt="review", interval_minutes=15)
+    assert req is not None
+    trigger_service.run(conn, req, manual=True)
+
+    before_chunks = repos.console_chunk_list(conn, instance.id)
+    assert [c["chunk_index"] for c in before_chunks] == [0, 1]
+
+    recover_on_startup(conn, adapter, trigger_service, now=time.time())
+
+    adapter.exec_stream_default = (["after1\n", "after2\n"], 0)
+    trigger_service.run(conn, req, manual=True)
+
+    after_chunks = repos.console_chunk_list(conn, instance.id)
+    assert [c["chunk_index"] for c in after_chunks] == [0, 1, 2, 3]
+    assert [c["content"] for c in after_chunks] == [
+        "before1\n",
+        "before2\n",
+        "after1\n",
+        "after2\n",
+    ]
 
 
 # ---------------------------------------------------------------------------
