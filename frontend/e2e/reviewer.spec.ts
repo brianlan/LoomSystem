@@ -6,7 +6,7 @@ import {
   mockEmptyAuditEvents,
   mockEmptyNotifications,
   mockImplementorStatus,
-  mockProject,
+  mockProjects,
   mockReviewerLifecycle,
 } from './fixtures'
 
@@ -44,7 +44,7 @@ function reviewerPanel(page: Page) {
 }
 
 test('reviewer launch shows running status', async ({ page }) => {
-  await mockProject(page, project)
+  await mockProjects(page, [project])
   await mockReviewerLifecycle(page, 1)
   await mockImplementorStatus(page, 1, emptyImplementorStatus)
   await mockEmptyNotifications(page, 1)
@@ -62,7 +62,7 @@ test('reviewer launch shows running status', async ({ page }) => {
 })
 
 test('reviewer manual trigger and termination', async ({ page }) => {
-  await mockProject(page, project)
+  await mockProjects(page, [project])
   await mockReviewerLifecycle(page, 1, {
     reviewer_cap: 1,
     reviewers: [
@@ -91,7 +91,7 @@ test('reviewer manual trigger and termination', async ({ page }) => {
 })
 
 test('console stream renders history then live chunks and surfaces disconnect', async ({ page }) => {
-  await mockProject(page, project)
+  await mockProjects(page, [project])
   await mockReviewerLifecycle(page, 1, {
     reviewer_cap: 1,
     reviewers: [
@@ -129,8 +129,9 @@ test('console stream renders history then live chunks and surfaces disconnect', 
 })
 
 test('reviewer launch surfaces an API error', async ({ page }) => {
-  await mockProject(page, project)
-  await mockApiError(page, 'POST', '/api/v1/projects/1/reviewers/launch')
+  await mockProjects(page, [project])
+  await mockReviewerLifecycle(page, 1)
+  await mockApiError(page, 'POST', '/projects/1/reviewers/launch', 'Server error')
   await mockImplementorStatus(page, 1, emptyImplementorStatus)
   await mockEmptyNotifications(page, 1)
 
