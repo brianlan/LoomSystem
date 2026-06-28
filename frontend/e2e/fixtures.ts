@@ -263,3 +263,119 @@ export async function goToProjects(page: Page) {
   await page.goto('/')
   await page.getByRole('button', { name: 'Projects' }).click()
 }
+
+export async function mockEmptyReviewerStatus(page: Page, projectId: number) {
+  await route(page, 'GET', `/projects/${projectId}/reviewers/status`, (route) =>
+    route.fulfill({
+      status: 200,
+      body: JSON.stringify({ project_id: projectId, reviewer_cap: 1, running_reviewers: 0, reviewers: [] }),
+    }),
+  )
+}
+
+export type ImplementorInstance = {
+  agent_instance_id: number
+  issue_number: number | null
+  container_id: string
+  container_name: string
+  status: string
+}
+
+export type ImplementorState = {
+  state: string
+  parallelism: number
+  implementors: ImplementorInstance[]
+}
+
+export async function mockImplementorLifecycle(
+  page: Page,
+  projectId: number,
+  initial: ImplementorState = { state: 'idle', parallelism: 1, implementors: [] },
+  options: { startIssues?: number[] } = {},
+) {
+  const state = { ...initial, implementors: [...initial.implementors] }
+  let nextId = 201
+
+  await page.route(`${BASE}/projects/${projectId}/implementors/status`, (route) =>
+    route.fulfill({
+      status: 200,
+      body: JSON.stringify({
+        project_id: projectId,
+        state: state.state,
+        running_implementors: state.implementors.filter((i) => i.status === 'running').length,
+        implementors: state.implementors,
+      }),
+    }),
+  )
+
+  await route(page, 'POST', `/projects/${projectId}/implementors/loop/start`, (route) => {
+    state.state = 'running'
+    if (options.startIssues) {
+      for (const issue of options.startIssues) {
+        const instanceId = nextId++
+        state.implementors.push({
+          agent_instance_id: instanceId,
+          issue_number: issue,
+          container_id: `container-${instanceId}`,
+          container_name: `implementor-${instanceId}`,
+          status: 'running',
+        })
+      }
+    }
+    route.fulfill({ status: 200, body: JSON.stringify({ message: 'Loop started' }) })
+  })
+
+  await route(page, 'POST', `/projects/${projectId}/implementors/loop/soft-stop`, (route) => {
+    state.state = 'draining'
+    route.fulfill({ status: 200, body: JSON.stringify({ message: 'Soft stop requested' }) })
+  })
+
+  await route(page, 'POST', `/projects/${projectId}/implementors/loop/hard-stop`, (route) => {
+    state.state = 'idle'
+    state.implementors = []
+    route.fulfill({ status: 200, body: JSON.stringify({ message: 'Hard stop requested' }) })
+  })
+
+  await route(page, 'POST', `/projects/${projectId}/implementors`, (route) => {
+    const instanceId = nextId++
+    const instance: ImplementorInstance = {
+      agent_instance_id: instanceId,
+      issue_number: null,
+      container_id: `container-${instanceId}`,
+      container_name: `implementor-${instanceId}`,
+      status: 'running',
+    }
+    let parsed: { issue_number?: number } = {}
+    try {
+      parsed = JSON.parse(route.request().postData() ?? '{}') as { issue_number?: number }
+    } catch {
+      parsed = {}
+    }
+    if (parsed.issue_number != null) instance.issue_number = parsed.issue_number
+    state.implementors.push(instance)
+    route.fulfill({
+      status: 200,
+      body: JSON.stringify({
+        agent_instance_id: instanceId,
+        container_id: instance.container_id,
+        container_name: instance.container_name,
+      }),
+    })
+  })
+
+  await page.route(new RegExp(`${BASE}/projects/${projectId}/implementors/(\\d+)/terminate`), (route) => {
+    if (route.request().method() !== 'POST') return route.fallback()
+    const match = route.request().url().match(/\/implementors\/(\d+)\/terminate/)
+    const id = match ? Number(match[1]) : 0
+    state.implementors = state.implementors.filter((i) => i.agent_instance_id !== id)
+    route.fulfill({ status: 200, body: JSON.stringify({ message: 'Terminated' }) })
+  })
+
+  return state
+}
+
+export async function mockEmptyNotifications(page: Page, projectId: number) {
+  await page.route(`${BASE}/projects/${projectId}/notifications?**`, (route) =>
+    route.fulfill({ status: 200, body: JSON.stringify([]) }),
+  )
+}
