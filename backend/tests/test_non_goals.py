@@ -16,34 +16,34 @@ def client(tmp_path: Path) -> TestClient:
 
 
 AUTH_PATHS = [
-    "/auth/login",
-    "/auth/logout",
-    "/auth/token",
-    "/auth/register",
-    "/auth/me",
-    "/users",
-    "/users/1",
+    "/api/v1/auth/login",
+    "/api/v1/auth/logout",
+    "/api/v1/auth/token",
+    "/api/v1/auth/register",
+    "/api/v1/auth/me",
+    "/api/v1/users",
+    "/api/v1/users/1",
 ]
 
 WEBHOOK_PATHS = [
-    "/webhooks",
-    "/webhooks/github",
-    "/webhooks/github/events",
+    "/api/v1/webhooks",
+    "/api/v1/webhooks/github",
+    "/api/v1/webhooks/github/events",
 ]
 
 RESOURCE_CAP_PATHS = [
-    "/resource-caps",
-    "/resource-limits",
-    "/quotas",
-    "/projects/1/resource-caps",
+    "/api/v1/resource-caps",
+    "/api/v1/resource-limits",
+    "/api/v1/quotas",
+    "/api/v1/projects/1/resource-caps",
 ]
 
 CLOUD_SDK_PATHS = [
-    "/deployments",
-    "/deploy",
-    "/sdk",
-    "/api-keys",
-    "/integrations",
+    "/api/v1/deployments",
+    "/api/v1/deploy",
+    "/api/v1/sdk",
+    "/api/v1/api-keys",
+    "/api/v1/integrations",
 ]
 
 
